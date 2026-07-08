@@ -1,0 +1,49 @@
+subject_id,batch,well_id,n_sessions,n_with_raw,ages
+sample2_well000,sample2,well000,1,1,['P41D']
+sample2_well001,sample2,well001,1,1,['P41D']
+sample2_well002,sample2,well002,1,1,['P41D']
+sample2_well003,sample2,well003,1,1,['P41D']
+sample2_well004,sample2,well004,1,1,['P41D']
+sample2_well005,sample2,well005,1,1,['P41D']
+sample2_well006,sample2,well006,1,1,['P41D']
+sample2_well007,sample2,well007,1,1,['P41D']
+sample2_well008,sample2,well008,1,1,['P41D']
+sample2_well009,sample2,well009,1,1,['P41D']
+sample2_well010,sample2,well010,1,1,['P41D']
+sample2_well011,sample2,well011,1,1,['P41D']
+sample2_well012,sample2,well012,1,1,['P41D']
+sample2_well013,sample2,well013,1,1,['P41D']
+sample2_well014,sample2,well014,1,1,['P41D']
+sample2_well015,sample2,well015,1,1,['P41D']
+sample2_well016,sample2,well016,1,1,['P41D']
+sample2_well017,sample2,well017,1,1,['P41D']
+sample2_well018,sample2,well018,1,1,['P41D']
+sample2_well019,sample2,well019,1,1,['P41D']
+sample2_well020,sample2,well020,1,1,['P41D']
+sample2_well021,sample2,well021,1,1,['P41D']
+sample2_well022,sample2,well022,1,1,['P41D']
+sample2_well023,sample2,well023,1,1,['P41D']
+sample_well000,sample,well000,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well001,sample,well001,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well002,sample,well002,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well003,sample,well003,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well004,sample,well004,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well005,sample,well005,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well006,sample,well006,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well007,sample,well007,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well008,sample,well008,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well009,sample,well009,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well010,sample,well010,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well011,sample,well011,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well012,sample,well012,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well013,sample,well013,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well014,sample,well014,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well015,sample,well015,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well016,sample,well016,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well017,sample,well017,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well018,sample,well018,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well019,sample,well019,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well020,sample,well020,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well021,sample,well021,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well022,sample,well022,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"
+sample_well023,sample,well023,4,4,"['P52D', 'P57D', 'P71D', 'P75D']"

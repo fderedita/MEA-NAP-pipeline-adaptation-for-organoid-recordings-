@@ -10,6 +10,7 @@ dependencies:
   - seaborn
   - pyyaml
   - tqdm
+  - tabulate
   - pip
   - pip:
       # Notebook kernel (register with: python -m ipykernel install --user
