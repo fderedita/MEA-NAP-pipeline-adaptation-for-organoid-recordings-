@@ -1,0 +1,26 @@
+Checkpoint A — environment resolution status
+=============================================
+
+STATUS: NOT RESOLVED — BLOCKED
+
+This machine (Windows, working dir C:\Users\franc\OneDrive\Desktop\MEA project)
+has no usable Python or conda/mamba installation:
+  - `python` / `python3` resolve only to the Windows Store app-execution-alias
+    stub (not a real interpreter) — running it prompts a Microsoft Store install.
+  - `conda` / `mamba` / `pip` / `pip3` are not on PATH.
+  - `git` IS available (git version 2.53.0.windows.2), used to init this repo.
+
+Consequence: environment.yml (see repo root) is a package-list SPEC only,
+transcribed from the handoff. It has not been resolved into a lockfile, so
+exact versions — most importantly `spikeinterface`, whose NWB extractor API
+has drifted across releases — are NOT YET KNOWN. Nothing beyond this scaffold
+can be executed (no streaming, no NWB reads, no feature extraction) until an
+interpreter + resolved environment exist somewhere.
+
+This needs a human decision — see chat for options (local install on this
+machine vs. running on a lab server/HPC/cloud environment, given the >260 GB
+of raw data and GPU spike-sorting compute implied by later stages).
+
+Once resolved, replace this file with the actual output of:
+  conda list --explicit   (or)   pip freeze
+and note the spikeinterface version explicitly, per handoff Task 1.2.
