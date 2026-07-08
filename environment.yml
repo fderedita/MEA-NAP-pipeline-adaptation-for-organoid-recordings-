@@ -12,6 +12,9 @@ dependencies:
   - tqdm
   - pip
   - pip:
+      # Notebook kernel (register with: python -m ipykernel install --user
+      # --name organoid-mea-foundation)
+      - ipykernel
       # DANDI / NWB
       - dandi
       - pynwb
