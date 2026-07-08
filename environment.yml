@@ -1,0 +1,45 @@
+name: organoid-mea-foundation
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - pyyaml
+  - tqdm
+  - pip
+  - pip:
+      # DANDI / NWB
+      - dandi
+      - pynwb
+      - h5py
+      - remfile
+      - lindi
+      - fsspec
+      - aiohttp
+      # Ephys
+      - spikeinterface[full]
+      - probeinterface
+      - neo
+      - elephant
+      - quantities
+      # Spectral / complexity
+      - neurodsp
+      - fooof
+      - bycycle
+      - antropy
+      # Graph
+      - networkx
+      - bctpy
+      # ML / stats
+      - scikit-learn
+      - statsmodels
+      - umap-learn
+      # Harmonization
+      - neuroCombat
+      - scikit-bio
+      # Optional (manifold)
+      - cebra

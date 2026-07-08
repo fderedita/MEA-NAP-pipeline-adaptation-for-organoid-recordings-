@@ -1,0 +1,111 @@
+# =============================================================================
+# organoid-mea-foundation — frozen parameters
+#
+# Single source of truth for every threshold/band/window used anywhere in
+# src/. Code must fail loudly (raise, not default) if a parameter it needs is
+# missing here. Values marked TODO are not yet determined and MUST be set
+# (with justification recorded in the relevant stage report) before the code
+# path that uses them is run for real. Values without TODO are given
+# explicitly in the project handoff (docs/handoff_foundation_phase.md) and are
+# frozen as-is unless a later checkpoint overrides them explicitly.
+# =============================================================================
+
+reproducibility:
+  random_seed: 42
+
+paths:
+  raw_data_dir: data/raw
+  manifests_dir: outputs/manifests
+  features_dir: outputs/features
+  figures_dir: outputs/figures
+  reports_dir: outputs/reports
+
+dandi:
+  dandisets:
+    - id: "001603"
+      role: ground_truth_anchor
+      platform: MaxWell_MaxOne
+    - id: "001872"
+      role: independent_cortical_replicate
+      platform: MaxWell_MaxTwo
+  # TODO: confirm whether authenticated DANDI API access is needed/available
+  # once NIH-review banner status is checked (Stage 0 / Stage 0.5).
+
+# ---------------------------------------------------------------------------
+# Stage 1: preprocessing + pipeline validation against deposited ground truth
+# ---------------------------------------------------------------------------
+preprocessing:
+  bandpass_hz: [300, 6000]          # spike-band filter, per handoff Task 1.2
+  reference: common_median          # common median reference (CMR)
+  # Whether the stored ElectricalSeries in each dataset is already filtered
+  # is a Stage 0 ⚠️ VERIFY item (Task 0.4). Do not double-filter: this must
+  # be checked per-dataset before this band is applied.
+  assume_wideband_raw: null         # TODO: set per-dataset after Task 0.4 audit
+
+spike_detection:
+  method: threshold                 # {threshold, kilosort2_5, kilosort3}
+  # TODO: confirm sorter family used by each depositor (open question #5 in
+  # handoff) before selecting the "rigorous" track sorter.
+  threshold_mad_multiplier: 5       # TODO: verify against literature/sorter defaults
+
+validation:
+  # Acceptance criteria for Stage 1 (handoff Task 1.4). If not met: report and
+  # stop for review, do not silently retune.
+  min_firing_rate_spearman_rho: 0.8
+  max_network_burst_rate_pct_diff: 15
+
+# ---------------------------------------------------------------------------
+# Stage 2: feature extraction battery — identical params across both datasets
+# ---------------------------------------------------------------------------
+active_electrode_criterion:
+  # TODO: finalize from Stage 0 Task 0.4 settings audit (MaxOne vs MaxTwo may
+  # differ; must reconcile or flag features as platform-sensitive).
+  min_firing_rate_hz: null
+
+burst_detection:
+  method: max_interval              # Max-Interval method, per handoff 4.1
+  max_isi_start_ms: null            # TODO
+  max_isi_end_ms: null              # TODO
+  min_spikes_per_burst: null        # TODO
+  min_burst_duration_ms: null       # TODO
+
+network:
+  sttc_dt_ms: null                  # TODO: STTC coincidence window
+  connectivity_threshold: null      # TODO: STTC threshold for graph edges
+  surrogate_control:
+    method: null                    # TODO (e.g., spike-time jitter/shuffle)
+    n_surrogates: null              # TODO
+
+spectral:
+  lfp_lowpass_hz: null              # TODO
+  lfp_target_fs_hz: 1000            # LFP downsample target, per handoff 4.3
+  psd_method: welch
+  fooof:
+    freq_range_hz: null             # TODO
+    aperiodic_mode: null            # TODO: {fixed, knee}
+
+complexity:
+  avalanche_bin_ms: null            # TODO
+  branching_ratio_method: null      # TODO
+  entropy:
+    sample_entropy_m: null          # TODO
+    sample_entropy_r: null          # TODO
+  lempel_ziv:
+    binarization_method: null       # TODO
+
+# ---------------------------------------------------------------------------
+# Stage 3-5: batch effect, harmonization, reference signature
+# ---------------------------------------------------------------------------
+batch_effect:
+  div_bin_width_days: null          # TODO: DIV binning for PERMANOVA / LMM
+  permanova_n_permutations: 999
+
+harmonization:
+  method: combat
+  batch_variable: dataset
+  covariates: [DIV]
+
+cross_validation:
+  scheme: GroupKFold
+  group: organoid_id
+  n_folds: 5                        # TODO: revisit once distinct-organoid counts known (Stage 0)

@@ -1,0 +1,28 @@
+# Data (large, mirrored raw NWB files — never commit)
+data/raw/**
+!data/raw/.gitkeep
+
+# Large generated outputs (features/figures can be big; manifests/reports are text and tracked)
+outputs/features/*.parquet
+outputs/figures/*.png
+outputs/figures/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env lock (recorded from actual resolved environment, may be machine-specific until finalized)
+
+# Local Claude Code settings
+.claude/
