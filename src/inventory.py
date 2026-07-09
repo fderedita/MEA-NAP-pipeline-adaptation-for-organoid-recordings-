@@ -238,6 +238,12 @@ def main():
     well_summary = _well_summary(m1872)
     well_summary.to_csv(manifests_dir / "manifest_001872_well_summary.csv", index=False)
 
+    # In-scope manifest: human-only, for Stage 0.5+ to consume directly instead
+    # of re-deriving the species filter each time. manifest_all.csv (above) is
+    # kept as the full, unfiltered audit record.
+    m_in_scope = m_all[m_all["species"] == "Homo sapiens"].reset_index(drop=True)
+    m_in_scope.to_csv(manifests_dir / "manifest_in_scope.csv", index=False)
+
     human_subj = subj_summary[subj_summary["species"] == "Homo sapiens"]
     nonhuman_subj = subj_summary[subj_summary["species"] != "Homo sapiens"]
     n_recorded = (human_subj["subject_type"] == "recorded").sum()
