@@ -1,18 +1,22 @@
 # Stage 1 — Pipeline validation report (STOPPED FOR REVIEW)
 
 **Status: acceptance criteria NOT met on any of the 4 human recorded subjects
-(HO1-HO4), with either detection method tried (threshold, wavelet).**
+(HO1-HO4), with any of the three methods tried (threshold, wavelet, and now
+a real CPU spike sorter, `lupin`, at full scale).**
 Per the handoff's explicit instruction ("If not met -> report the discrepancy and
 stop for review, do not silently tune"), this report documents the discrepancy
 and stops here for human review rather than adjusting parameters or the
 comparison methodology to force a pass.
 
-A third, more promising avenue (a real CPU spike sorter, `spykingcircus2`, via
-`spikeinterface`) was identified on 2026-07-10 and feasibility-tested on a
-small subset (see "CPU spike sorter feasibility check" below) -- unlike
-threshold/wavelet, it produces genuinely separated units, not raw multi-unit
-activity. Full-scale validation with it is pending a time/compute decision
-(estimated multiple hours per subject) -- not yet run to completion.
+The third avenue (real CPU spike sorting via `spikeinterface`, expected to be
+the most promising since it produces genuinely separated units, not raw
+multi-unit activity) was run to completion on `HO1` at full scale
+(2026-07-10) -- see "CPU spike sorter check" below. **It did not close the
+gap** -- firing-rate correlation with ground truth was essentially zero
+(rho=-0.025, not significant), the weakest of the three methods tried. Likely
+explained by comparing uncurated sorter output (732 units) against
+curated/QC-filtered ground truth (131 units), and untuned spatial parameters
+-- see the detailed section for the reasoning and what's still open.
 
 ## Method
 
@@ -70,7 +74,7 @@ BrainWave5 sample file, see `docs/brainwave5_usage.md`): wavelet detected
 than the other -- the gap is structural (MUA vs curated SUA), not a
 detection-method choice problem.**
 
-## CPU spike sorter feasibility check (2026-07-10, not yet run to completion)
+## CPU spike sorter check (2026-07-10) — real sorting, still doesn't close the gap
 
 Unlike threshold/wavelet (simple detectors), `spikeinterface` bundles real
 CPU-capable spike **sorters** (`spykingcircus2`, `tridesclous2`, `lupin`) --
@@ -78,15 +82,46 @@ full pipelines with whitening, clustering (HDBSCAN), and template matching,
 conceptually much closer to what produced the deposited ground truth
 (Kilosort2) than raw threshold crossings.
 
-Feasibility test: `spykingcircus2` on a 30-channel, 60-second subset of HO1's
-raw recording -- **succeeded**, producing 20 distinct, plausible units (e.g.
-547, 763, 366, 564, 310 spikes each -- not "everything crosses threshold").
-Runtime: 106s for this subset. Scaling to the full recording (1020 channels x
-180s = ~34x channels x 3x duration) is estimated at multiple hours per
-subject (channel-count scaling for dense-array clustering/template-matching
-is typically worse than linear, so a naive 106s x 34 x 3 extrapolation is
-likely optimistic) -- not yet run to completion, pending a time/compute
-commitment decision.
+**Feasibility test** (30-channel, 60-second subset of HO1): all three ran
+successfully. `lupin` (spikeinterface's own sorter, combining ideas from
+yass/tridesclous/spyking-circus/kilosort) was fastest (30.9s) and found the
+most units (27) with plausible, varied spike counts -- chosen for the
+full-scale run on that basis.
+
+**Full-scale result** (`lupin`, all 1020 electrodes, full 180s, matched to
+electrodes via each unit's computed spatial location, same strategy as the
+deposited ground truth):
+
+| Subject | Method | n_units | self FR mean (Hz) | Spearman rho | burst %diff | runtime |
+|---|---|---|---|---|---|---|
+| HO1 | threshold | -- | 4.080 | 0.163 | 1153% | ~51 min |
+| HO1 | wavelet | -- | 6.453 | 0.114 | 1509% | ~40 min |
+| HO1 | **lupin (real sorter)** | **732** | 1.754 | **-0.025** (n.s., p=0.42) | 1279% | ~73 min |
+
+**Real spike sorting did not close the gap -- if anything it's the weakest
+of the three on firing-rate correlation** (essentially zero/no correlation,
+not even a weak positive one). Two likely reasons, neither of which is "the
+sorter doesn't work":
+
+1. **`lupin` found 732 units vs. Kilosort2's curated 131** -- ~5.6x more.
+   This run used `lupin`'s raw output with no quality curation applied,
+   while the deposited ground truth already went through Kilosort2 +
+   explicit QC filtering (SNR<5, ISI-violation>0.3, firing-rate<0.05Hz
+   exclusion -- see the HO1 notebook exploration's file metadata). Comparing
+   "everything a sorter proposed" against "only what survived curation" is
+   not an apples-to-apples comparison -- an equivalent curation/merging step
+   on `lupin`'s output would be needed before concluding the sorter itself
+   underperforms.
+2. **Default spatial parameters weren't tuned for this array.** `lupin`'s
+   defaults (`detection_radius_um=50`, `template_radius_um=100`, etc.) were
+   not adjusted for MaxWell's actual electrode pitch/density -- mismatched
+   radii can cause over-splitting (one neuron's signal across nearby
+   electrodes treated as separate units), which would inflate the unit
+   count in exactly the direction observed.
+
+Neither of these was tuned/adjusted after seeing this result -- they're
+documented as open follow-up work, not applied. Per the "don't silently
+tune" rule, this result is reported as-is.
 
 ## Interpretation (not a tuning attempt -- explaining the discrepancy)
 
