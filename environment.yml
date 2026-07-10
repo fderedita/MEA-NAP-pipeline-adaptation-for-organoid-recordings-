@@ -11,6 +11,7 @@ dependencies:
   - pyyaml
   - tqdm
   - tabulate
+  - pytest
   - pip
   - pip:
       # Notebook kernel (register with: python -m ipykernel install --user

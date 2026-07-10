@@ -108,10 +108,16 @@ active_electrode_criterion:
 
 burst_detection:
   method: max_interval              # Max-Interval method, per handoff 4.1
-  max_isi_start_ms: null            # TODO
-  max_isi_end_ms: null              # TODO
-  min_spikes_per_burst: null        # TODO
-  min_burst_duration_ms: null       # TODO
+  # Widely-cited defaults for the classic Max Interval burst detector
+  # (NeuroExplorer/Axion convention; see Cotterill & Eglen 2019, "Burst
+  # Detection Methods", Front. Comput. Neurosci. for a review citing these
+  # as standard) -- not empirically tuned on our data, flagged as a
+  # literature default like MEA-NAP's own thr4/FOOOF conventions elsewhere
+  # in this file.
+  max_isi_start_ms: 100             # ISI <= this may start a burst
+  max_isi_end_ms: 200               # burst continues while ISI <= this (looser than start, allows brief gaps)
+  min_spikes_per_burst: 5
+  min_burst_duration_ms: 50
 
 network:
   sttc_dt_ms: null                  # TODO: STTC coincidence window

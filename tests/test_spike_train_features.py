@@ -1,20 +1,78 @@
 """Minimal unit tests for feature functions on synthetic spike trains with
 known ground-truth statistics (MFR/ISI), to catch silent numeric errors.
-
-Currently placeholders (xfail) since src/features/spike_train.py is not
-implemented yet — un-skip as each function lands.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import pytest
 
+from src.features.spike_train import compute_spike_train_features, aggregate_spike_train_features
 
-def test_synthetic_regular_spike_train_mfr():
-    """A perfectly regular 10 Hz spike train over 10s should have MFR == 10 Hz."""
-    spike_times = np.arange(0, 10, 0.1)  # 100 spikes over 10s = 10 Hz
-    pytest.xfail("compute_spike_train_features not yet implemented (Stage 2)")
+CONFIG = {
+    "burst_detection": {
+        "max_isi_start_ms": 100,
+        "max_isi_end_ms": 200,
+        "min_spikes_per_burst": 5,
+        "min_burst_duration_ms": 50,
+    }
+}
 
-    from src.features.spike_train import compute_spike_train_features
 
-    features = compute_spike_train_features(spike_times, config={})
+def test_regular_spike_train_mfr_and_isi_cv():
+    """A perfectly regular 10 Hz spike train over 10s: MFR==10Hz, ISI CV==0 (no variability)."""
+    spike_times = np.arange(0, 10, 0.1)  # 100 spikes over 10s = 10 Hz, ISI = 0.1s always
+    features = compute_spike_train_features(spike_times, duration_s=10.0, config=CONFIG)
     assert features["mfr_hz"] == pytest.approx(10.0, rel=1e-6)
+    assert features["isi_mean_s"] == pytest.approx(0.1, rel=1e-6)
     assert features["isi_cv"] == pytest.approx(0.0, abs=1e-6)
+    assert features["n_spikes"] == 100
+
+
+def test_empty_spike_train():
+    """No spikes: MFR is 0, ISI stats are NaN (undefined, not silently 0), no bursts."""
+    features = compute_spike_train_features(np.array([]), duration_s=10.0, config=CONFIG)
+    assert features["mfr_hz"] == 0.0
+    assert np.isnan(features["isi_mean_s"])
+    assert features["n_bursts"] == 0
+    assert features["pct_spikes_in_bursts"] == 0.0
+
+
+def test_single_synthetic_burst_detected():
+    """5 spikes 20ms apart (well within max_isi_start), then a long silent
+    gap, then 5 more spikes 20ms apart -- exactly 2 bursts of 5 spikes each,
+    100% of spikes in bursts.
+    """
+    burst1 = np.arange(0, 5) * 0.02          # 0, 0.02, 0.04, 0.06, 0.08
+    burst2 = burst1 + 5.0                     # same shape, 5s later (way past max_isi_end)
+    spike_times = np.concatenate([burst1, burst2])
+    features = compute_spike_train_features(spike_times, duration_s=10.0, config=CONFIG)
+    assert features["n_bursts"] == 2
+    assert features["mean_spikes_per_burst"] == pytest.approx(5.0)
+    assert features["pct_spikes_in_bursts"] == pytest.approx(100.0)
+    # burst duration = time from 1st to 5th spike = 0.08s
+    assert features["mean_burst_duration_s"] == pytest.approx(0.08, rel=1e-6)
+
+
+def test_no_bursts_when_isis_too_large():
+    """Spikes spaced 500ms apart (well beyond max_isi_end=200ms) -> no bursts at all."""
+    spike_times = np.arange(0, 5, 0.5)
+    features = compute_spike_train_features(spike_times, duration_s=5.0, config=CONFIG)
+    assert features["n_bursts"] == 0
+    assert features["pct_spikes_in_bursts"] == 0.0
+
+
+def test_aggregate_across_units_mean_and_nan_handling():
+    """Aggregation takes mean/std across units and doesn't let NaN (e.g. from
+    a unit with too few spikes for ISI CV) poison the whole recording.
+    """
+    unit_a = compute_spike_train_features(np.arange(0, 10, 0.1), duration_s=10.0, config=CONFIG)  # 10Hz regular
+    unit_b = compute_spike_train_features(np.array([1.0]), duration_s=10.0, config=CONFIG)  # single spike, NaN ISI stats
+    agg = aggregate_spike_train_features([unit_a, unit_b])
+    assert agg["n_units"] == 2
+    # unit_b contributes 0.1 Hz MFR (1 spike / 10s); mean of [10.0, 0.1]
+    assert agg["mfr_hz_mean"] == pytest.approx((10.0 + 0.1) / 2, rel=1e-6)
+    # isi_cv is NaN for unit_b (needs >=3 spikes) -- mean should just be unit_a's value, not NaN
+    assert agg["isi_cv_mean"] == pytest.approx(0.0, abs=1e-6)
