@@ -19,6 +19,8 @@ the acceptance criteria in config/params.yaml
 """
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -26,22 +28,86 @@ from pynwb import NWBHDF5IO
 from scipy.spatial import cKDTree
 from scipy.stats import spearmanr
 
-from meanap.pipeline.spike_detection import bandpass_filter, detect_spikes_threshold
+from meanap.pipeline.spike_detection import bandpass_filter, detect_spikes_threshold, detect_spikes_wavelet
 from meanap.pipeline.firing_rates import firing_rates_bursts
 from meanap.params import Params
 
 from src.config import load_config, require
 
 
-def detect_spikes_full_recording(raw_path: str | Path, config: dict) -> dict:
-    """Stream per-channel threshold spike detection over the full recording.
+def _method_kwargs_from_config(config: dict, method: str) -> dict:
+    if method == "mea_nap_threshold":
+        return {
+            "multiplier": require(config, "spike_detection.threshold_mad_multiplier"),
+            "ref_period_ms": require(config, "spike_detection.ref_period_ms"),
+        }
+    if method == "mea_nap_wavelet":
+        return {
+            "wname": require(config, "spike_detection.wavelet.name"),
+            "wid_ms": tuple(require(config, "spike_detection.wavelet.wid_ms")),
+            "n_scales": require(config, "spike_detection.wavelet.n_scales"),
+            "cost_factor": require(config, "spike_detection.wavelet.cost_factor"),
+            "option": require(config, "spike_detection.wavelet.option"),
+        }
+    raise ValueError(f"Unknown spike_detection.method: {method!r}")
+
+
+def _process_channel_batch(
+    raw_path: str, ch_indices: list[int], low: float, high: float, method: str, method_kwargs: dict
+) -> dict[int, np.ndarray]:
+    """Worker (runs in its own process): opens its own NWB handle, processes a batch of channels.
+
+    HDF5 file handles aren't safely shared across process boundaries, so each
+    worker opens the file independently rather than receiving an open handle.
+    """
+    io = NWBHDF5IO(raw_path, mode="r")
+    try:
+        nwbfile = io.read()
+        ts = nwbfile.acquisition["ElectricalSeries"]
+        fs = float(ts.rate)
+        results: dict[int, np.ndarray] = {}
+        for ch_idx in ch_indices:
+            trace = ts.data[:, ch_idx].astype(float)
+            filtered = bandpass_filter(trace, fs, low, high)
+            if method == "mea_nap_threshold":
+                frames, _threshold = detect_spikes_threshold(
+                    filtered, method_kwargs["multiplier"], method_kwargs["ref_period_ms"], fs, filter_flag=False
+                )
+            else:
+                frames = detect_spikes_wavelet(
+                    filtered, fs, wid_ms=method_kwargs["wid_ms"], ns=method_kwargs["n_scales"],
+                    option=method_kwargs["option"], L=method_kwargs["cost_factor"], wname=method_kwargs["wname"],
+                )
+            results[ch_idx] = frames.astype(float) / fs  # seconds
+        return results
+    finally:
+        io.close()
+
+
+def detect_spikes_full_recording(raw_path: str | Path, config: dict, n_workers: int | None = None) -> dict:
+    """Per-channel spike detection over the full recording, parallelized across processes.
+
+    Method is selected by config `spike_detection.method`
+    ({mea_nap_threshold, mea_nap_wavelet}). Channels are independent, so work
+    is split into `n_workers` batches, each a separate process that opens its
+    own read-only NWB handle and streams its channels one at a time
+    (memory-safe: no process ever holds the full (n_samples, n_channels)
+    array -- this machine is RAM-constrained).
 
     Returns dict with: spike_times (dict[ch_idx -> np.ndarray seconds]),
     coords ((n_channels, 2) rel_x/rel_y), fs, duration_s, n_channels.
     """
     low, high = require(config, "preprocessing.bandpass_hz")
-    multiplier = require(config, "spike_detection.threshold_mad_multiplier")
-    ref_period_ms = require(config, "spike_detection.ref_period_ms")
+    method = require(config, "spike_detection.method")
+    method_kwargs = _method_kwargs_from_config(config, method)
+
+    if n_workers is None:
+        # Conservative: each worker can transiently hold ~150-200MB (CWT
+        # coefficient arrays scale with ns x n_samples for the wavelet
+        # method), and this machine has been RAM-constrained (~2GB free
+        # observed earlier) -- err toward fewer workers, not maximum
+        # parallelism.
+        n_workers = min(6, max(1, (os.cpu_count() or 4) - 2))
 
     io = NWBHDF5IO(str(raw_path), mode="r")
     try:
@@ -55,17 +121,19 @@ def detect_spikes_full_recording(raw_path: str | Path, config: dict) -> dict:
         rel_x = np.asarray(electrodes["rel_x"][:], dtype=float)
         rel_y = np.asarray(electrodes["rel_y"][:], dtype=float)
         coords = np.column_stack([rel_x, rel_y])
-
-        spike_times: dict[int, np.ndarray] = {}
-        for ch_idx in range(n_channels):
-            trace = ts.data[:, ch_idx].astype(float)  # one channel at a time, memory-safe
-            filtered = bandpass_filter(trace, fs, low, high)
-            frames, _threshold = detect_spikes_threshold(
-                filtered, multiplier, ref_period_ms, fs, filter_flag=False
-            )
-            spike_times[ch_idx] = frames.astype(float) / fs  # seconds
     finally:
         io.close()
+
+    chunks = [c.tolist() for c in np.array_split(np.arange(n_channels), n_workers) if len(c) > 0]
+
+    spike_times: dict[int, np.ndarray] = {}
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = [
+            executor.submit(_process_channel_batch, str(raw_path), chunk, low, high, method, method_kwargs)
+            for chunk in chunks
+        ]
+        for future in as_completed(futures):
+            spike_times.update(future.result())
 
     return {
         "spike_times": spike_times,

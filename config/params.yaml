@@ -46,12 +46,23 @@ preprocessing:
 
 spike_detection:
   # 2026-07-09 decision: replaced the originally-planned custom "pragmatic"
-  # CPU threshold track with MEA-NAP's own Python-ported threshold detector
+  # CPU threshold track with MEA-NAP's own Python-ported detector(s)
   # (see external/MEA-NAP, meanap.pipeline.spike_detection). No GPU sorter
   # (Kilosort2.5/3) track on this machine -- see outputs/reports/env_lock.txt.
-  method: mea_nap_threshold
+  # 2026-07-10: threshold method's Stage 1 validation failed acceptance
+  # criteria badly (see stage1_validation.md); trying the wavelet method
+  # (more selective than a flat amplitude threshold) as a next step, per
+  # user request. method selects which one validate_pipeline.py runs.
+  method: mea_nap_wavelet           # {mea_nap_threshold, mea_nap_wavelet}
   threshold_mad_multiplier: 4       # MEA-NAP's "thr4" convention (median - 4*MAD/0.6745)
   ref_period_ms: 2.0                # MEA-NAP Params.ref_period default
+  wavelet:
+    # MEA-NAP/SpikeDetectionParams defaults (bior1.5 CWT) -- not tuned by us
+    name: bior1.5
+    wid_ms: [0.4, 0.8]              # expected spike width range, milliseconds
+    n_scales: 5                     # number of CWT scales
+    cost_factor: -0.12              # Bayesian cost factor L
+    option: l                       # 'l' (liberal) or 'c' (conservative)
 
 validation:
   # Acceptance criteria for Stage 1 (handoff Task 1.4). If not met: report and

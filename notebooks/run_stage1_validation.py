@@ -2,7 +2,15 @@
 (HO1-HO4), each using their P7M-tagged raw + deposited-Units pair (the age
 tag common across all 4). See src/validate_pipeline.py for the comparison
 logic and config/params.yaml for the frozen parameters / acceptance criteria.
+
+Usage:
+    python notebooks\\run_stage1_validation.py [--subjects HO1,HO2] [--out FILENAME.json]
+
+--out lets different spike_detection.method runs (threshold vs wavelet) save
+to separate result files instead of overwriting each other -- config/params.yaml's
+current `spike_detection.method` determines which method actually runs.
 """
+import argparse
 import json
 import sys
 import time
@@ -35,15 +43,23 @@ PAIRS = {
 }
 
 if __name__ == "__main__":
-    out_path = Path(r"C:\Users\franc\MEA project\outputs\reports\stage1_validation_results.json")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--subjects", default=",".join(PAIRS.keys()), help="comma-separated subject list")
+    parser.add_argument("--out", default="stage1_validation_results.json", help="output filename under outputs/reports/")
+    args = parser.parse_args()
+    subjects = args.subjects.split(",")
+
+    out_path = Path(r"C:\Users\franc\MEA project\outputs\reports") / args.out
 
     config = load_config()
+    print(f"spike_detection.method = {require(config, 'spike_detection.method')}", flush=True)
     results = {}
     if out_path.exists():
         results = json.loads(out_path.read_text(encoding="utf-8"))
         print(f"Resuming: already have results for {list(results.keys())}", flush=True)
 
-    for subject, (raw_path, units_path) in PAIRS.items():
+    for subject in subjects:
+        raw_path, units_path = PAIRS[subject]
         if subject in results:
             print(f"=== {subject} === (skipping, already done)", flush=True)
             continue
