@@ -241,3 +241,80 @@ def compare_to_deposited_units(raw_path: str | Path, units_path: str | Path, con
         "deposited_network_burst_rate_per_min": deposited_burst_rate,
         "network_burst_rate_pct_diff": burst_pct_diff,
     }
+
+
+def compare_sorter_to_deposited_units(
+    raw_path: str | Path, units_path: str | Path, sorter_name: str = "lupin"
+) -> dict:
+    """Full per-subject comparison: a real spikeinterface CPU sorter's output
+    (genuinely separated units, not raw multi-unit threshold crossings) vs
+    deposited Units.
+
+    Unlike compare_to_deposited_units (threshold/wavelet detection), this
+    runs actual spike sorting (clustering + template matching) via
+    spikeinterface.sorters, then extracts each sorted unit's spatial
+    location (via a SortingAnalyzer's unit_locations extension) to match it
+    to the nearest raw electrode -- the same matching strategy used for the
+    deposited ground truth, so both sides of the comparison go through an
+    equivalent "unit -> nearest electrode" step.
+    """
+    import spikeinterface as si
+    import spikeinterface.extractors as se
+    import spikeinterface.sorters as ss
+
+    recording = se.read_nwb_recording(str(raw_path), electrical_series_path="acquisition/ElectricalSeries")
+    fs = recording.get_sampling_frequency()
+    duration_s = recording.get_total_duration()
+    n_channels = recording.get_num_channels()
+    electrode_coords = recording.get_channel_locations()
+
+    sorter_folder = Path(raw_path).parent / f"_sorter_{sorter_name}_{Path(raw_path).stem}"
+    sorting = ss.run_sorter(
+        sorter_name, recording, folder=str(sorter_folder), remove_existing_folder=True, verbose=False
+    )
+
+    analyzer = si.create_sorting_analyzer(sorting, recording, format="memory", sparse=True)
+    analyzer.compute("random_spikes")
+    analyzer.compute("templates")
+    analyzer.compute("unit_locations")
+    unit_locations = analyzer.get_extension("unit_locations").get_data()
+
+    unit_ids = sorting.get_unit_ids()
+    n_units = len(unit_ids)
+    spike_times_by_unit = {i: sorting.get_unit_spike_train(uid) / fs for i, uid in enumerate(unit_ids)}
+
+    unit_to_electrode = match_units_to_electrodes(unit_locations[:, :2], electrode_coords)
+    self_rate = np.zeros(n_channels)
+    for i in range(n_units):
+        self_rate[unit_to_electrode[i]] += len(spike_times_by_unit[i]) / duration_s
+
+    deposited = load_deposited_units(units_path)
+    deposited_unit_to_electrode = match_units_to_electrodes(deposited["coords"], electrode_coords)
+    deposited_rate = aggregate_deposited_rate_per_electrode(deposited, deposited_unit_to_electrode, n_channels)
+
+    rho, pval = spearmanr(self_rate, deposited_rate)
+
+    self_burst_rate = network_burst_rate(spike_times_by_unit, n_units, fs, duration_s)
+    deposited_burst_rate = network_burst_rate(
+        deposited["spike_times"], deposited["n_units"], fs, deposited["duration_s"]
+    )
+    if deposited_burst_rate > 0:
+        burst_pct_diff = 100.0 * abs(self_burst_rate - deposited_burst_rate) / deposited_burst_rate
+    else:
+        burst_pct_diff = float("inf") if self_burst_rate > 0 else 0.0
+
+    return {
+        "raw_path": str(raw_path),
+        "units_path": str(units_path),
+        "sorter_name": sorter_name,
+        "n_electrodes": n_channels,
+        "n_sorted_units": n_units,
+        "n_deposited_units": deposited["n_units"],
+        "self_rate_mean_hz": float(np.mean(self_rate)),
+        "deposited_rate_mean_hz": float(np.mean(deposited_rate)),
+        "firing_rate_spearman_rho": float(rho),
+        "firing_rate_spearman_pval": float(pval),
+        "self_network_burst_rate_per_min": self_burst_rate,
+        "deposited_network_burst_rate_per_min": deposited_burst_rate,
+        "network_burst_rate_pct_diff": burst_pct_diff,
+    }
