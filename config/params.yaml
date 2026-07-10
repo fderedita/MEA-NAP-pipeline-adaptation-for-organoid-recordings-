@@ -120,11 +120,16 @@ burst_detection:
   min_burst_duration_ms: 50
 
 network:
-  sttc_dt_ms: null                  # TODO: STTC coincidence window
-  connectivity_threshold: null      # TODO: STTC threshold for graph edges
+  # MEA-NAP's own defaults (meanap.params.Params), reused directly rather
+  # than re-deriving -- already validated against MATLAB for the
+  # deterministic parts (STTC itself); the probabilistic thresholding is
+  # inherently stochastic in both MATLAB and this port (see
+  # meanap.pipeline.probabilistic_threshold's own docstring).
+  sttc_lag_ms: [10, 15, 25]         # multiple lags, per MEA-NAP convention (func_con_lag_val)
   surrogate_control:
-    method: null                    # TODO (e.g., spike-time jitter/shuffle)
-    n_surrogates: null              # TODO
+    method: circular_shift          # meanap.pipeline.probabilistic_threshold.circular_shift_spikes
+    n_surrogates: 200               # MEA-NAP's prob_thresh_rep_num default
+    tail: 0.05                      # MEA-NAP's prob_thresh_tail default (one-sided upper-tail significance)
 
 spectral:
   lfp_lowpass_hz: null              # TODO

@@ -8,23 +8,39 @@ Spike-source policy is frozen in config/params.yaml `spike_detection` per
 the Stage 1 "Closing decision" (outputs/reports/stage1_validation.md):
 recordings with deposited Units use them directly; recordings without
 (DANDI:001872) fall back to curated `lupin` sorting. This module currently
-implements the deposited-Units path (DANDI:001603) and the spike_train
-feature block; network/spectral/complexity and the self-derived path are
-added incrementally in that order (see commit history).
+implements the deposited-Units path (DANDI:001603) and the
+spike_train + network feature blocks; spectral/complexity and the
+self-derived path are added incrementally in that order (see commit
+history).
+
+Saves incrementally (one JSON checkpoint written after every recording, not
+just at the end) -- network features in particular are slow enough
+(O(n_units^2) pairwise STTC, up to ~1hr total across all 14 recordings)
+that losing all progress to an interruption would be costly, per the
+lesson learned in Stage 1 (see notebooks/run_stage1_validation.py).
 """
 from __future__ import annotations
 
-import glob
+import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-from src.config import load_config
-from src.features.spike_train import compute_spike_train_features, aggregate_spike_train_features
+from src.config import load_config, require
+from src.features.network import compute_network_features
+from src.features.spike_train import aggregate_spike_train_features, compute_spike_train_features
 from src.validate_pipeline import load_deposited_units
 
 DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
+
+# DANDI:001603's human subjects all use MaxWell MaxOne at a fixed 20kHz
+# sampling rate (confirmed in Stage 0's settings audit,
+# outputs/reports/stage0_inventory.md) -- the deposited-Units-only NWB
+# files (no raw ElectricalSeries) don't carry their own fs, so this is
+# supplied from that audit rather than read per-file.
+MAXONE_FS_HZ = 20000.0
 
 # Locally-mirrored deposited-Units files for DANDI:001603's human subjects
 # (HO1-HO8). HO2/HO3 have more sessions on DANDI than are mirrored here --
@@ -86,12 +102,17 @@ def process_deposited_recording(subject_id: str, units_path: str, config: dict) 
     """One feature-matrix row for a recording using deposited Units directly."""
     deposited = load_deposited_units(units_path)
     meta = _units_metadata(units_path)
+    spike_times_dict = {i: st for i, st in enumerate(deposited["spike_times"].values())}
 
     per_unit_features = [
         compute_spike_train_features(st, deposited["duration_s"], config)
         for st in deposited["spike_times"].values()
     ]
     agg = aggregate_spike_train_features(per_unit_features)
+
+    network_feats = compute_network_features(
+        spike_times_dict, deposited["n_units"], MAXONE_FS_HZ, deposited["duration_s"], config
+    )
 
     row = {
         "dataset_id": "001603",
@@ -102,25 +123,47 @@ def process_deposited_recording(subject_id: str, units_path: str, config: dict) 
         **meta,
     }
     row.update({f"spike_train__{k}": v for k, v in agg.items()})
+    row.update(network_feats)
     return row
 
 
-def build_feature_matrix(recordings: list[dict], config: dict) -> pd.DataFrame:
-    """Build the feature matrix for a list of recording specs.
+def _row_key(rec: dict) -> str:
+    return f"{rec['subject_id']}::{Path(rec['units_path']).name}"
+
+
+def build_feature_matrix(
+    recordings: list[dict], config: dict, checkpoint_path: Path | None = None
+) -> pd.DataFrame:
+    """Build the feature matrix for a list of recording specs, saving a JSON
+    checkpoint after every recording so a long run can resume.
 
     Each spec must have at minimum `subject_id`, `dataset_id`, and either
     `units_path` (deposited path) or a raw path + spike_source for the
     self-derived path (not yet implemented here -- see module docstring).
     """
-    rows = []
+    rows_by_key: dict[str, dict] = {}
+    if checkpoint_path and checkpoint_path.exists():
+        rows_by_key = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        print(f"Resuming: already have {len(rows_by_key)} recordings", flush=True)
+
     for rec in recordings:
+        key = _row_key(rec)
+        if key in rows_by_key:
+            print(f"  {key} (skipping, already done)", flush=True)
+            continue
+        print(f"  {key} ...", flush=True)
         if "units_path" in rec:
-            rows.append(process_deposited_recording(rec["subject_id"], rec["units_path"], config))
+            row = process_deposited_recording(rec["subject_id"], rec["units_path"], config)
         else:
             raise NotImplementedError(
                 f"Self-derived (non-deposited) recordings not yet wired into build_feature_matrix: {rec}"
             )
-    return pd.DataFrame(rows)
+        rows_by_key[key] = row
+        if checkpoint_path:
+            checkpoint_path.write_text(json.dumps(rows_by_key, indent=2, default=float), encoding="utf-8")
+            print(f"    (saved checkpoint, {len(rows_by_key)} recordings done)", flush=True)
+
+    return pd.DataFrame(list(rows_by_key.values()))
 
 
 def main():
@@ -128,15 +171,16 @@ def main():
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
     recordings = discover_001603_deposited_recordings()
-    print(f"Found {len(recordings)} locally-mirrored deposited-Units recordings in 001603")
-    for r in recordings:
-        print(f"  {r['subject_id']}: {Path(r['units_path']).name}")
+    print(f"Found {len(recordings)} locally-mirrored deposited-Units recordings in 001603", flush=True)
 
-    df = build_feature_matrix(recordings, config)
-    out_path = FEATURES_DIR / "feature_matrix_001603_spike_train.parquet"
+    checkpoint_path = FEATURES_DIR / "_checkpoint_001603.json"
+    df = build_feature_matrix(recordings, config, checkpoint_path=checkpoint_path)
+
+    out_path = FEATURES_DIR / "feature_matrix_001603.parquet"
     df.to_parquet(out_path, index=False)
-    print(f"\nWrote {out_path} ({len(df)} rows, {len(df.columns)} columns)")
-    print(df[["organoid_id", "age", "duration_s", "spike_train__n_units", "spike_train__mfr_hz_mean"]])
+    print(f"\nWrote {out_path} ({len(df)} rows, {len(df.columns)} columns)", flush=True)
+    print(df[["organoid_id", "age", "duration_s", "spike_train__n_units", "spike_train__mfr_hz_mean",
+              "network__mean_degree_15ms"]], flush=True)
 
 
 if __name__ == "__main__":
