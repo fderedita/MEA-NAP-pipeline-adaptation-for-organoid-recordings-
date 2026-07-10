@@ -123,6 +123,57 @@ Neither of these was tuned/adjusted after seeing this result -- they're
 documented as open follow-up work, not applied. Per the "don't silently
 tune" rule, this result is reported as-is.
 
+## Curation test (2026-07-10) — fixes aggregate stats, not per-electrode ranking
+
+Per user request, applied QC curation to `lupin`'s already-computed output
+(reloaded from disk, not re-sorted) using the *same* thresholds as the
+deposited ground truth's own curation (SNR>=5, ISI-violation<=0.3,
+firing-rate>=0.05Hz), via `spikeinterface.qualitymetrics` on a
+`SortingAnalyzer` (waveforms/templates/noise levels computed fresh -- this
+step took a few minutes, far less than the original ~73min sort since no
+clustering/template-matching is re-run).
+
+| | uncurated `lupin` | **curated `lupin`** | deposited (ground truth) |
+|---|---|---|---|
+| n_units | 732 | **235** | 131 |
+| self FR mean (Hz) | 1.754 | **0.313** | 0.173 |
+| Spearman rho | -0.025 | **-0.003** | (target >=0.8) |
+| burst rate (/min) | 946.97 | **144.76** | 68.67 |
+| burst %diff | 1279% | **111%** | (target <=15%) |
+
+**Curation closes most of the gap on aggregate/population-level statistics**
+(unit count 732->235, much closer to 131; mean firing rate 1.8x off instead
+of ~10x; burst rate %diff dropped by >10x) **but does essentially nothing
+for per-electrode ranking correlation** (rho stayed at ~0, not even weakly
+positive). This is a real, informative split, not noise:
+
+- The population-level *amount* of activity curated `lupin` finds is now
+  plausibly similar to the deposited ground truth.
+- *Which specific electrodes* are active according to `lupin` has no
+  detectable relationship to *which specific electrodes* the deposited
+  Units are near -- rank order is statistically indistinguishable from
+  random (p=0.93).
+
+**Most likely explanation**: the raw and deposited-Units files being
+compared are not the exact same recording session (see stage0_inventory.md
+-- HO1's two files are ~1h17min apart on the same calendar day, tagged with
+the same nominal age but not confirmed to be temporally identical). If the
+specific set of active neurons genuinely differs somewhat between the two
+sessions (plausible for a live culture over ~1+ hour), *no* detection or
+sorting method could recover electrode-level correlation, no matter how
+good -- only aggregate population statistics would be expected to stay
+comparable, which is exactly the pattern observed. This can't be confirmed
+with the data currently available (no subject in 001603 has a raw file and
+a deposited-Units file from the literal same session) -- flagged as an
+open question, not resolved here.
+
+**Implication for whether to test more sorters**: `spykingcircus2` and
+`tridesclous2` do conceptually similar clustering + template matching to
+`lupin`; if the session-mismatch hypothesis is right, they would likely
+show the same "curation fixes aggregate stats, not per-electrode ranking"
+pattern, at a cost of several more hours of compute each. Recommendation:
+not run at full scale for now -- see "Open questions" below.
+
 ## Interpretation (not a tuning attempt -- explaining the discrepancy)
 
 Self-derived firing rates are ~24-48x higher than deposited rates. This is

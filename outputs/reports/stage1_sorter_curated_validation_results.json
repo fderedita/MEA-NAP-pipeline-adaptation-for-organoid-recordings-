@@ -1,0 +1,23 @@
+{
+  "HO1_lupin_curated": {
+    "raw_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T011900_ecephys.nwb",
+    "units_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T002125.nwb",
+    "sorter_name": "lupin_curated",
+    "n_electrodes": 1020,
+    "n_sorted_units_total": 732,
+    "n_sorted_units_curated": 235,
+    "n_deposited_units": 131,
+    "curation_criteria": {
+      "snr_min": 5.0,
+      "isi_violation_max": 0.3,
+      "firing_rate_min_hz": 0.05
+    },
+    "self_rate_mean_hz": 0.3127684251374555,
+    "deposited_rate_mean_hz": 0.17296296296296296,
+    "firing_rate_spearman_rho": -0.00291034260483778,
+    "firing_rate_spearman_pval": 0.9260345550520954,
+    "self_network_burst_rate_per_min": 144.763,
+    "deposited_network_burst_rate_per_min": 68.667,
+    "network_burst_rate_pct_diff": 110.81887952000233
+  }
+}
