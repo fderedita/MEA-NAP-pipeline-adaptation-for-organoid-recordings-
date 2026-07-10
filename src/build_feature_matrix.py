@@ -1,15 +1,143 @@
 """Stage 2 orchestrator — assembles outputs/features/feature_matrix.parquet.
 
 One row per recording, columns = features from spike_train/network/spectral/
-complexity + metadata: dataset(lab/platform), organoid_id, DIV, well_id,
-spike_source in {deposited, self-derived}, raw_provenance. Applies the same
-active-electrode criterion to both datasets (from Stage 0 Task 0.4). NaN
-policy must be explicit and documented, never a silent drop.
+complexity + metadata: dataset (lab/platform), organoid_id, DIV/age, well_id,
+spike_source in {deposited, self_derived_lupin_curated}, raw_provenance.
 
-Not yet implemented — gated behind Stage 1 validation (Checkpoint C).
+Spike-source policy is frozen in config/params.yaml `spike_detection` per
+the Stage 1 "Closing decision" (outputs/reports/stage1_validation.md):
+recordings with deposited Units use them directly; recordings without
+(DANDI:001872) fall back to curated `lupin` sorting. This module currently
+implements the deposited-Units path (DANDI:001603) and the spike_train
+feature block; network/spectral/complexity and the self-derived path are
+added incrementally in that order (see commit history).
 """
 from __future__ import annotations
 
+import glob
+from pathlib import Path
 
-def build_feature_matrix(manifest, config: dict):
-    raise NotImplementedError
+import pandas as pd
+
+from src.config import load_config
+from src.features.spike_train import compute_spike_train_features, aggregate_spike_train_features
+from src.validate_pipeline import load_deposited_units
+
+DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
+FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
+
+# Locally-mirrored deposited-Units files for DANDI:001603's human subjects
+# (HO1-HO8). HO2/HO3 have more sessions on DANDI than are mirrored here --
+# these are the ones prioritised in Stage 0.5 (one pair per distinct `age`
+# tag, see outputs/reports/stage0_5_mirror.log), not the full set.
+_HO_UNITS_FILES = {
+    "HO1": ["sub-HO1_ses-20250924T002125.nwb"],
+    "HO2": [
+        "sub-HO2_ses-20250916T190936.nwb",
+        "sub-HO2_ses-20250916T190927_obj-1s1jcwl.nwb",
+        "sub-HO2_ses-20250916T190928_obj-86y47o.nwb",
+        "sub-HO2_ses-20250916T190927_obj-vm83mt.nwb",
+    ],
+    "HO3": [
+        "sub-HO3_ses-20250916T190937.nwb",
+        "sub-HO3_ses-20250916T190930_obj-2sqh9d.nwb",
+        "sub-HO3_ses-20250916T190930_obj-ikzmsj.nwb",
+        "sub-HO3_ses-20250916T190928.nwb",
+    ],
+    "HO4": ["sub-HO4_ses-20250924T002126.nwb"],
+    "HO5": ["sub-HO5_ses-20250924T002125.nwb"],
+    "HO6": ["sub-HO6_ses-20250924T002106.nwb"],
+    "HO7": ["sub-HO7_ses-20250924T002328.nwb"],
+    "HO8": ["sub-HO8_ses-20250924T002134.nwb"],
+}
+
+
+def discover_001603_deposited_recordings() -> list[dict]:
+    """List (subject_id, units_path) pairs for every locally-mirrored
+    deposited-Units file among 001603's human subjects."""
+    recordings = []
+    for subject_id, filenames in _HO_UNITS_FILES.items():
+        for fname in filenames:
+            path = DATA_RAW / fname
+            if path.exists():
+                recordings.append({"subject_id": subject_id, "units_path": str(path), "dataset_id": "001603"})
+    return recordings
+
+
+def _units_metadata(units_path: str) -> dict:
+    """Pull session_id/age/species straight from the NWB file (not the
+    manifest CSV) so this module has no hidden dependency on Stage 0 having
+    been re-run recently."""
+    from pynwb import NWBHDF5IO
+
+    io = NWBHDF5IO(units_path, mode="r")
+    try:
+        nwbfile = io.read()
+        return {
+            "age": nwbfile.subject.age if nwbfile.subject else None,
+            "species": nwbfile.subject.species if nwbfile.subject else None,
+            "session_start_time": str(nwbfile.session_start_time),
+        }
+    finally:
+        io.close()
+
+
+def process_deposited_recording(subject_id: str, units_path: str, config: dict) -> dict:
+    """One feature-matrix row for a recording using deposited Units directly."""
+    deposited = load_deposited_units(units_path)
+    meta = _units_metadata(units_path)
+
+    per_unit_features = [
+        compute_spike_train_features(st, deposited["duration_s"], config)
+        for st in deposited["spike_times"].values()
+    ]
+    agg = aggregate_spike_train_features(per_unit_features)
+
+    row = {
+        "dataset_id": "001603",
+        "organoid_id": subject_id,
+        "recording_path": units_path,
+        "spike_source": "deposited",
+        "duration_s": deposited["duration_s"],
+        **meta,
+    }
+    row.update({f"spike_train__{k}": v for k, v in agg.items()})
+    return row
+
+
+def build_feature_matrix(recordings: list[dict], config: dict) -> pd.DataFrame:
+    """Build the feature matrix for a list of recording specs.
+
+    Each spec must have at minimum `subject_id`, `dataset_id`, and either
+    `units_path` (deposited path) or a raw path + spike_source for the
+    self-derived path (not yet implemented here -- see module docstring).
+    """
+    rows = []
+    for rec in recordings:
+        if "units_path" in rec:
+            rows.append(process_deposited_recording(rec["subject_id"], rec["units_path"], config))
+        else:
+            raise NotImplementedError(
+                f"Self-derived (non-deposited) recordings not yet wired into build_feature_matrix: {rec}"
+            )
+    return pd.DataFrame(rows)
+
+
+def main():
+    config = load_config()
+    FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    recordings = discover_001603_deposited_recordings()
+    print(f"Found {len(recordings)} locally-mirrored deposited-Units recordings in 001603")
+    for r in recordings:
+        print(f"  {r['subject_id']}: {Path(r['units_path']).name}")
+
+    df = build_feature_matrix(recordings, config)
+    out_path = FEATURES_DIR / "feature_matrix_001603_spike_train.parquet"
+    df.to_parquet(out_path, index=False)
+    print(f"\nWrote {out_path} ({len(df)} rows, {len(df.columns)} columns)")
+    print(df[["organoid_id", "age", "duration_s", "spike_train__n_units", "spike_train__mfr_hz_mean"]])
+
+
+if __name__ == "__main__":
+    main()
