@@ -1,12 +1,14 @@
-# Stage 1 — Pipeline validation report (STOPPED FOR REVIEW)
+# Stage 1 — Pipeline validation report (CLOSED, 2026-07-10)
 
-**Status: acceptance criteria NOT met on any of the 4 human recorded subjects
-(HO1-HO4), with any of the three methods tried (threshold, wavelet, and now
-a real CPU spike sorter, `lupin`, at full scale).**
-Per the handoff's explicit instruction ("If not met -> report the discrepancy and
-stop for review, do not silently tune"), this report documents the discrepancy
-and stops here for human review rather than adjusting parameters or the
-comparison methodology to force a pass.
+**Status: acceptance criteria (rho>=0.8, burst %diff<=15%) NOT met by any of
+the four methods tried (threshold, wavelet, uncurated CPU sorter, curated
+CPU sorter), on any of the 4 human recorded subjects tested.** Per the
+handoff's explicit instruction ("If not met -> report the discrepancy and
+stop for review, do not silently tune"), this was reported and stopped for
+human review at each step rather than silently adjusted. **Decision (human,
+2026-07-10): accept this outcome and proceed to Stage 2** -- see "Closing
+decision" at the end of this report for what that means for Stage 2's
+methodology.
 
 The third avenue (real CPU spike sorting via `spikeinterface`, expected to be
 the most promising since it produces genuinely separated units, not raw
@@ -250,3 +252,51 @@ mismatch is far larger than "coarse" suggests.
    the realistic alternatives are (a) redefine the acceptance criteria/
    comparison for what a CPU-only method can be expected to achieve, or
    (b) move sorting to a GPU-equipped machine.
+
+## Closing decision (human, 2026-07-10)
+
+Four methods tested (threshold, wavelet, uncurated CPU sorter, curated CPU
+sorter), all on real HO1-HO4 raw+deposited-Units pairs, none met the
+original per-electrode rate/burst acceptance criteria. Curation (`lupin` +
+QC matching the deposited criteria) fixed aggregate/population-level
+statistics substantially (unit count, mean rate, burst rate all much
+closer to ground truth) but left per-electrode ranking at chance level --
+most plausibly because no subject in 001603 has a raw file and a
+deposited-Units file from the literal same recording session (see
+"Curation test" above), which would cap electrode-level agreement
+regardless of method quality. Running the other two available CPU sorters
+(`spykingcircus2`, `tridesclous2`) at full scale was considered and
+declined -- they do conceptually similar clustering/template-matching to
+`lupin` and would likely reproduce the same pattern at a cost of several
+more hours each, per the same reasoning.
+
+**Decision: proceed to Stage 2 accepting this outcome**, with the following
+consequences for Stage 2's methodology (to be applied consistently, not
+re-litigated per-recording):
+
+- **For DANDI:001603 subjects with deposited Units (both "recorded" HO1-4
+  and "sourced" HO5-8)**: use the deposited Units directly as the spike
+  source for Stage 2 features, per the handoff's own Task 4.5 guidance
+  ("using deposited Units where present ... always labelled"). Do NOT
+  re-derive spikes for these subjects -- the deposited data is the best
+  available ground truth, and Stage 1 showed our self-derived methods don't
+  improve on it.
+- **For DANDI:001872 (raw-only, no deposited Units) and any future subject
+  without deposited Units**: self-derived spike source is the only option.
+  Given curated CPU sorting (`lupin` + QC) is the best-validated method
+  available (closest aggregate-level agreement with real ground truth, even
+  though per-electrode ranking wasn't recoverable in this test), use it as
+  the frozen self-derived method -- but treat resulting single-unit-labelled
+  features with the same caution as the rest of this report: aggregate/
+  population-level statistics (mean firing rate, burst rate, network-level
+  measures) are reasonably trustworthy; anything that depends on *which
+  specific electrode* corresponds to *which specific neuron* should not be
+  over-interpreted.
+- **Per-recording provenance labelling (`spike_source`: `deposited` vs
+  `self_derived_lupin_curated`) is mandatory** in the Stage 2 feature
+  matrix, per the project's own "never mix without labelling" guardrail --
+  this Stage 1 finding is exactly why that guardrail exists.
+- Compute cost is real: curated `lupin` sorting took ~75-80 minutes per
+  full-length HO1-scale recording on this machine. Stage 2's scope (which
+  001872 recordings get self-derived features, how many) should account for
+  this rather than assuming it's cheap.
