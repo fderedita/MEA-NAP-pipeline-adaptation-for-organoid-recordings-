@@ -37,22 +37,33 @@ dandi:
 preprocessing:
   bandpass_hz: [300, 6000]          # spike-band filter, per handoff Task 1.2
   reference: common_median          # common median reference (CMR)
-  # Whether the stored ElectricalSeries in each dataset is already filtered
-  # is a Stage 0 ⚠️ VERIFY item (Task 0.4). Do not double-filter: this must
-  # be checked per-dataset before this band is applied.
-  assume_wideband_raw: null         # TODO: set per-dataset after Task 0.4 audit
+  # ElectricalSeries is stored under nwbfile.acquisition (not .processing) in
+  # both dandisets, and NeuroConv's own convention is to place raw/wideband
+  # data there -- treated as wideband raw. NOT independently confirmed via a
+  # PSD check against a known filter cutoff; flagged as an assumption in
+  # stage1_validation.md, not a settled fact.
+  assume_wideband_raw: true
 
 spike_detection:
-  method: threshold                 # {threshold, kilosort2_5, kilosort3}
-  # TODO: confirm sorter family used by each depositor (open question #5 in
-  # handoff) before selecting the "rigorous" track sorter.
-  threshold_mad_multiplier: 5       # TODO: verify against literature/sorter defaults
+  # 2026-07-09 decision: replaced the originally-planned custom "pragmatic"
+  # CPU threshold track with MEA-NAP's own Python-ported threshold detector
+  # (see external/MEA-NAP, meanap.pipeline.spike_detection). No GPU sorter
+  # (Kilosort2.5/3) track on this machine -- see outputs/reports/env_lock.txt.
+  method: mea_nap_threshold
+  threshold_mad_multiplier: 4       # MEA-NAP's "thr4" convention (median - 4*MAD/0.6745)
+  ref_period_ms: 2.0                # MEA-NAP Params.ref_period default
 
 validation:
   # Acceptance criteria for Stage 1 (handoff Task 1.4). If not met: report and
   # stop for review, do not silently retune.
   min_firing_rate_spearman_rho: 0.8
   max_network_burst_rate_pct_diff: 15
+  # Network burst rate for both self-derived and deposited sides is computed
+  # via MEA-NAP's own Bakkum ISI_N network-burst detector
+  # (meanap.pipeline.firing_rates.firing_rates_bursts), using its defaults
+  # (min_spike_network_burst=10, min_channel_network_burst=3, automatic
+  # ISI_N threshold) -- not yet exposed as separate config keys since Stage 2
+  # hasn't formally adopted MEA-NAP's burst detector, only this validation has.
 
 # ---------------------------------------------------------------------------
 # Stage 2: feature extraction battery — identical params across both datasets

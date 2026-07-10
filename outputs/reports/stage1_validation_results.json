@@ -1,0 +1,30 @@
+{
+  "HO1": {
+    "raw_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T011900_ecephys.nwb",
+    "units_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T002125.nwb",
+    "n_electrodes": 1020,
+    "n_units": 131,
+    "self_rate_mean_hz": 4.080291000100285,
+    "deposited_rate_mean_hz": 0.17296296296296296,
+    "firing_rate_spearman_rho": 0.16276061211929493,
+    "firing_rate_spearman_pval": 1.7258794335747e-07,
+    "self_network_burst_rate_per_min": 860.24,
+    "deposited_network_burst_rate_per_min": 68.667,
+    "network_burst_rate_pct_diff": 1152.770617618361,
+    "elapsed_s": 3075.3020808696747
+  },
+  "HO2": {
+    "raw_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO2_ses-20250912T144839_ecephys.nwb",
+    "units_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO2_ses-20250916T190927_obj-1s1jcwl.nwb",
+    "n_electrodes": 1014,
+    "n_units": 173,
+    "self_rate_mean_hz": 4.21517094017094,
+    "deposited_rate_mean_hz": 0.08632478632478632,
+    "firing_rate_spearman_rho": 0.09054446875261819,
+    "firing_rate_spearman_pval": 0.003906517190477044,
+    "self_network_burst_rate_per_min": 686.333,
+    "deposited_network_burst_rate_per_min": 45.667,
+    "network_burst_rate_pct_diff": 1402.9080079707444,
+    "elapsed_s": 2797.961840867996
+  }
+}
