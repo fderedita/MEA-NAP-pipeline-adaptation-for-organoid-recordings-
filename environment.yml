@@ -30,6 +30,7 @@ dependencies:
       - neo
       - elephant
       - quantities
+      - hdbscan  # required by spikeinterface's CPU sorters (spykingcircus2/tridesclous2/lupin)
       # Spectral / complexity
       - neurodsp
       - fooof
