@@ -90,19 +90,26 @@ Claude Code to do this if/when it's worth prioritizing.
 ## The event-based compression gap-filling choice
 
 If your recordings are saved in BrainWave5's "raw compressed + events" mode
-(only waveform snippets around detected threshold crossings are stored, to
-save disk space -- confirmed this is how our own test fixture file is
-stored), reading them requires deciding how to fill the "gaps" between
+(3Brain's official name: **"Noise Blanking compression"** -- only waveform
+snippets around detected threshold crossings are stored, to save disk
+space), reading them requires deciding how to fill the "gaps" between
 stored events. `src/io_brainwave.py` defaults to `fill_gaps_strategy="synthetic_noise"`,
 **not** `"zeros"`:
 
 - `"synthetic_noise"` fills gaps with Gaussian noise parameterized by the
   REAL per-channel noise mean/stddev that 3Brain's hardware also records
-  throughout acquisition (not arbitrary noise) -- verified by reading
-  `neo`'s `biocamrawio.py` source directly. This avoids sharp flat-to-signal
-  jumps at every gap/event boundary, which both detection methods could
-  otherwise mistake for spikes, and gives more realistic noise statistics
-  for threshold-based detection.
+  throughout acquisition (not arbitrary noise). **This is guaranteed by the
+  BRW v4.x format spec itself** (3Brain's official "File Format
+  Documentation For BRW v4.x, BXR v3.x and BCMP v1.x" -- the same spec
+  BrainWave 5.x writes to), not just something our one test file happens to
+  have: whenever event-based/Noise-Blanking compression is used, the format
+  always includes `NoiseMean`/`NoiseStdDev`/`NoiseTOC`/`NoiseChIdxs`
+  datasets alongside the event data -- confirmed by reading the official
+  PDF spec directly (Section on `EventsBasedSparseRaw`, pages 12-13), not
+  just inferred from the reader's source code. This avoids sharp
+  flat-to-signal jumps at every gap/event boundary, which both detection
+  methods could otherwise mistake for spikes, and gives more realistic
+  noise statistics for threshold-based detection.
 - `"zeros"` fills gaps with a flat baseline value and is available (`--
   fill-gaps-strategy zeros` equivalent by passing it explicitly to
   `load_brainwave_recording`/`export_to_meanap_mat`) but not recommended
@@ -131,5 +138,44 @@ comparison it was slightly worse. Both methods detect multi-unit activity
 individually-identified neurons. Treat either method's output as a coarse,
 fast first-pass indicator of activity level and rough timing, not a
 substitute for real spike sorting if your analysis needs single-unit
-resolution. This machine has no GPU, so Kilosort-class sorting isn't
-available here; if that's needed, it requires different hardware.
+resolution.
+
+## Beyond detection: real CPU spike sorting is possible (not yet wired into the runner script)
+
+`run_meanap_on_brainwave.py` only does simple detection (threshold/wavelet),
+not full spike sorting. But `spikeinterface` (already in this environment)
+bundles real CPU-capable sorters that do genuine clustering + template
+matching, much closer in spirit to Kilosort than to a threshold check:
+`spykingcircus2`, `tridesclous2`, `lupin` (spikeinterface's own sorter,
+combining ideas from yass/tridesclous/spyking-circus/kilosort). Feasibility-
+tested on a 30-channel/60s DANDI subset (2026-07-10):
+
+| Sorter | Time (30ch/60s) | Units found |
+|---|---|---|
+| `spykingcircus2` | 106.4s | 20 |
+| `tridesclous2` | 69.7s | 25 |
+| `lupin` | **30.9s** | **27** |
+
+All three produced genuinely distinct units with plausible, varied spike
+counts -- not just "everything above a threshold." `lupin` was both fastest
+and found the most units. None of these require a GPU. Full-scale runs
+(hundreds to thousands of channels, minutes of recording) are estimated at
+1+ hours per recording (channel-count scaling for dense-array clustering is
+typically worse than linear, so this is a rough lower bound) -- not yet run
+to completion on a full recording as of this writing. Basic usage pattern
+(not yet wrapped into a script for this repo):
+
+```python
+import spikeinterface.extractors as se
+import spikeinterface.sorters as ss
+
+recording = se.read_nwb_recording("file.nwb", electrical_series_path="acquisition/ElectricalSeries")
+# or, for a .brw file: recording, *_ = src.io_brainwave.load_brainwave_recording("file.brw")
+sorting = ss.run_sorter("lupin", recording, folder="output_folder")
+```
+
+If GPU access becomes available (see conversation log), Kilosort4 is also
+available through the same `spikeinterface.sorters.run_sorter()` interface
+(`pip install kilosort` first) -- this machine has no GPU, so Kilosort-class
+sorting isn't available here; if that's needed now, it requires different
+hardware.
