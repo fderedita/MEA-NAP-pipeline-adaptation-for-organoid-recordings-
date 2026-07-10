@@ -1,12 +1,18 @@
-# Stage 1 — Pipeline validation report (IN PROGRESS / STOPPED FOR REVIEW)
+# Stage 1 — Pipeline validation report (STOPPED FOR REVIEW)
 
-**Status: acceptance criteria NOT met on the 2 subjects completed so far (HO1, HO2).**
+**Status: acceptance criteria NOT met on any of the 4 human recorded subjects
+(HO1-HO4), with either detection method tried (threshold, wavelet).**
 Per the handoff's explicit instruction ("If not met -> report the discrepancy and
 stop for review, do not silently tune"), this report documents the discrepancy
 and stops here for human review rather than adjusting parameters or the
-comparison methodology to force a pass. HO3/HO4 may still be running in the
-background (long compute, ~50min/subject) for completeness, but the outcome
-pattern is already clear and unlikely to change qualitatively.
+comparison methodology to force a pass.
+
+A third, more promising avenue (a real CPU spike sorter, `spykingcircus2`, via
+`spikeinterface`) was identified on 2026-07-10 and feasibility-tested on a
+small subset (see "CPU spike sorter feasibility check" below) -- unlike
+threshold/wavelet, it produces genuinely separated units, not raw multi-unit
+activity. Full-scale validation with it is pending a time/compute decision
+(estimated multiple hours per subject) -- not yet run to completion.
 
 ## Method
 
@@ -26,15 +32,61 @@ pattern is already clear and unlikely to change qualitatively.
   self-derived per-electrode spike times and the deposited per-unit spike
   times.
 
-## Results
+## Results — threshold method (all 4 human recorded subjects, complete)
 
 | Subject | n_electrodes | n_units | self FR mean (Hz) | deposited FR mean (Hz) | Spearman rho | self burst rate (/min) | deposited burst rate (/min) | burst %diff |
 |---|---|---|---|---|---|---|---|---|
 | HO1 | 1020 | 131 | 4.080 | 0.173 | **0.163** | 860.2 | 68.7 | **1153%** |
 | HO2 | 1014 | 173 | 4.215 | 0.086 | **0.091** | 686.3 | 45.7 | **1403%** |
+| HO3 | 1020 | 80  | 2.016 | 0.055 | **0.081** | 1070.7 | 14.7 | **7200%** |
+| HO4 | 1020 | 123 | 4.135 | 0.068 | **0.214** | 265.7 | 9.7  | **2648%** |
 
 **Acceptance criteria (config/params.yaml):** Spearman rho >= 0.8, burst rate
-%diff <= 15%. **Neither subject is remotely close on either metric.**
+%diff <= 15%. **No subject is remotely close on either metric.** The pattern
+holds consistently across all 4 -- this rules out "unlucky on one subject" as
+an explanation.
+
+## Results — wavelet method (bior1.5 CWT, HO1 only)
+
+Tested as an alternative detection method per user request (2026-07-10), on
+the hypothesis that a more shape-selective detector (rejects crossings that
+don't match a spike-like waveform) might narrow the gap. It did not -- it was
+slightly worse on both metrics:
+
+| Subject | Method | self FR mean (Hz) | Spearman rho | self burst rate (/min) | burst %diff |
+|---|---|---|---|---|---|
+| HO1 | threshold | 4.080 | 0.163 | 860.2  | 1153% |
+| HO1 | wavelet   | 6.453 | **0.114** | 1105.1 | **1509%** |
+
+Mechanistic explanation (see conversation log for full detail): MEA-NAP's
+wavelet detector combines 5 independent scale-wise threshold checks via a
+logical OR, and deliberately uses a "liberal" secondary threshold to minimize
+missed spikes at the cost of more false positives -- both properties increase
+detected activity relative to a single amplitude threshold, they don't
+decrease it. Confirmed on a second, independent dataset too (3Brain
+BrainWave5 sample file, see `docs/brainwave5_usage.md`): wavelet detected
+~6x more activity than threshold there as well (11.69 Hz vs 1.93 Hz).
+**Conclusion: neither available detection method is closer to ground truth
+than the other -- the gap is structural (MUA vs curated SUA), not a
+detection-method choice problem.**
+
+## CPU spike sorter feasibility check (2026-07-10, not yet run to completion)
+
+Unlike threshold/wavelet (simple detectors), `spikeinterface` bundles real
+CPU-capable spike **sorters** (`spykingcircus2`, `tridesclous2`, `lupin`) --
+full pipelines with whitening, clustering (HDBSCAN), and template matching,
+conceptually much closer to what produced the deposited ground truth
+(Kilosort2) than raw threshold crossings.
+
+Feasibility test: `spykingcircus2` on a 30-channel, 60-second subset of HO1's
+raw recording -- **succeeded**, producing 20 distinct, plausible units (e.g.
+547, 763, 366, 564, 310 spikes each -- not "everything crosses threshold").
+Runtime: 106s for this subset. Scaling to the full recording (1020 channels x
+180s = ~34x channels x 3x duration) is estimated at multiple hours per
+subject (channel-count scaling for dense-array clustering/template-matching
+is typically worse than linear, so a naive 106s x 34 x 3 extrapolation is
+likely optimistic) -- not yet run to completion, pending a time/compute
+commitment decision.
 
 ## Interpretation (not a tuning attempt -- explaining the discrepancy)
 

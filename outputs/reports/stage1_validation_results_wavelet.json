@@ -1,0 +1,16 @@
+{
+  "HO1": {
+    "raw_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T011900_ecephys.nwb",
+    "units_path": "C:\\Users\\franc\\MEA project\\data\\raw\\sub-HO1_ses-20250924T002125.nwb",
+    "n_electrodes": 1020,
+    "n_units": 131,
+    "self_rate_mean_hz": 6.45255333621107,
+    "deposited_rate_mean_hz": 0.17296296296296296,
+    "firing_rate_spearman_rho": 0.11429399143975881,
+    "firing_rate_spearman_pval": 0.00025441544061291456,
+    "self_network_burst_rate_per_min": 1105.07,
+    "deposited_network_burst_rate_per_min": 68.667,
+    "network_burst_rate_pct_diff": 1509.3174304979102,
+    "elapsed_s": 2378.4743156433105
+  }
+}
