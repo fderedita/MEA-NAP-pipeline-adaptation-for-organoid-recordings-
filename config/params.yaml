@@ -149,13 +149,33 @@ spectral:
     aperiodic_mode: fixed           # {fixed, knee}
 
 complexity:
-  avalanche_bin_ms: null            # TODO
-  branching_ratio_method: null      # TODO
+  # Avalanche bin width: adaptive (mean inter-event interval of the pooled
+  # population spike train), NOT a fixed ms value -- this is the standard
+  # convention since Beggs & Plenz 2003 and used across the great majority
+  # of avalanche/criticality literature, specifically because a fixed bin
+  # size doesn't generalize across recordings with very different activity
+  # levels (our own 001603 recordings already span ~0.4-1.3Hz mean firing
+  # rate). Computed per-recording, not a config scalar.
+  avalanche_bin_method: mean_iei
+  avalanche_min_size: 1             # minimum total spike count for a bin-run to count as an avalanche
+  # powerlaw package's own standard method: estimate xmin by minimizing
+  # Kolmogorov-Smirnov distance between data and fitted power law (Clauset,
+  # Shalizi & Newman 2009), rather than us picking a fixed cutoff.
+  powerlaw_xmin_method: auto
+  # Classic Beggs & Plenz branching ratio: for every pair of consecutive
+  # non-empty bins (ancestor, descendant) within an avalanche, the ratio of
+  # descendant to ancestor activity, averaged across all such pairs.
+  branching_ratio_method: ratio_of_consecutive_bins
   entropy:
-    sample_entropy_m: null          # TODO
-    sample_entropy_r: null          # TODO
+    # Richman & Moorman 2000's own standard defaults for sample entropy:
+    # embedding dimension m=2, tolerance r=0.2 x signal std.
+    sample_entropy_m: 2
+    sample_entropy_r: 0.2
   lempel_ziv:
-    binarization_method: null       # TODO
+    # Binarize the population-rate signal by a median split (equal-weight
+    # 0/1 partition) -- standard, assumption-light convention for LZ
+    # complexity on continuous physiological signals.
+    binarization_method: median_split
 
 # ---------------------------------------------------------------------------
 # Stage 3-5: batch effect, harmonization, reference signature

@@ -38,6 +38,7 @@ dependencies:
       - fooof
       - bycycle
       - antropy
+      - powerlaw
       # Graph
       - networkx
       - bctpy
