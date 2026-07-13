@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import load_config, require
+from src.features.complexity import compute_complexity_features
 from src.features.network import compute_network_features
 from src.features.spectral import aggregate_spectral_features, compute_spectral_features_for_channel
 from src.features.spike_train import aggregate_spike_train_features, compute_spike_train_features
@@ -259,6 +260,27 @@ def add_spectral_features(checkpoint_path: Path, config: dict) -> None:
         print(f"    (saved checkpoint)", flush=True)
 
 
+def add_complexity_features(checkpoint_path: Path, config: dict) -> None:
+    """Enrich the existing checkpoint's rows with complexity features.
+    Unlike spectral, this only needs spike times (already available from
+    the deposited Units, reloaded here) -- computable for ALL recordings
+    including HO5-8 (no raw needed), and cheap (no O(n^2) or per-channel
+    raw streaming), so no parallelization/long-run concerns here.
+    """
+    rows_by_key = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    for key, row in rows_by_key.items():
+        if any(k.startswith("complexity__") for k in row):
+            print(f"  {key} (complexity already done, skipping)", flush=True)
+            continue
+        print(f"  {key} ...", flush=True)
+        deposited = load_deposited_units(row["recording_path"])
+        spike_times_dict = {i: st for i, st in enumerate(deposited["spike_times"].values())}
+        complexity_feats = compute_complexity_features(spike_times_dict, deposited["duration_s"], config)
+        row.update({f"complexity__{k}": v for k, v in complexity_feats.items()})
+        checkpoint_path.write_text(json.dumps(rows_by_key, indent=2, default=float), encoding="utf-8")
+    print(f"  done, saved checkpoint", flush=True)
+
+
 def main():
     config = load_config()
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -271,6 +293,10 @@ def main():
 
     print("\nAdding spectral features where a raw file is available...", flush=True)
     add_spectral_features(checkpoint_path, config)
+
+    print("\nAdding complexity features (all recordings)...", flush=True)
+    add_complexity_features(checkpoint_path, config)
+
     df = pd.DataFrame(list(json.loads(checkpoint_path.read_text(encoding="utf-8")).values()))
 
     out_path = FEATURES_DIR / "feature_matrix_001603.parquet"
