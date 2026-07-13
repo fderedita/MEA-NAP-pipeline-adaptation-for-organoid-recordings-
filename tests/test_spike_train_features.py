@@ -9,7 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pytest
 
-from src.features.spike_train import compute_spike_train_features, aggregate_spike_train_features
+from src.features.spike_train import (
+    aggregate_spike_train_features,
+    compute_spike_train_features,
+    detect_bursts_meanap_isin_batch,
+)
 
 CONFIG = {
     "burst_detection": {
@@ -105,6 +109,28 @@ def test_meanap_isin_no_bursts_when_isis_too_large():
     features = compute_spike_train_features(spike_times, duration_s=5.0, config=CONFIG_MEANAP)
     assert features["n_bursts"] == 0
     assert features["pct_spikes_in_bursts"] == 0.0
+
+
+def test_meanap_isin_batch_matches_standalone_per_channel():
+    """detect_bursts_meanap_isin_batch (the primary path, called once per
+    recording by the build_feature_matrix* orchestrators) must give the
+    same per-channel result as the standalone single-unit fallback --
+    both ultimately call the same MEA-NAP function
+    (single_channel_burst_detection / burst_detect_isin), just batched vs.
+    per-unit, so results should be identical, not just similar."""
+    ch0 = np.arange(0, 8) * 0.02
+    ch1 = np.arange(0, 5) * 0.5  # too sparse to burst under this threshold
+    spike_times_dict = {0: ch0, 1: ch1}
+
+    batch = detect_bursts_meanap_isin_batch(spike_times_dict, n_channels=2, fs=20000.0, duration_s=10.0, config=CONFIG_MEANAP)
+
+    feats_ch0_batch = compute_spike_train_features(ch0, duration_s=10.0, config=CONFIG_MEANAP, burst_info=batch[0])
+    feats_ch0_standalone = compute_spike_train_features(ch0, duration_s=10.0, config=CONFIG_MEANAP)
+    assert feats_ch0_batch["n_bursts"] == feats_ch0_standalone["n_bursts"]
+    assert feats_ch0_batch["pct_spikes_in_bursts"] == pytest.approx(feats_ch0_standalone["pct_spikes_in_bursts"])
+
+    feats_ch1_batch = compute_spike_train_features(ch1, duration_s=10.0, config=CONFIG_MEANAP, burst_info=batch[1])
+    assert feats_ch1_batch["n_bursts"] == 0
 
 
 def test_aggregate_across_units_mean_and_nan_handling():

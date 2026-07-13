@@ -96,16 +96,17 @@ def _detect_bursts_max_interval(spike_times_s: np.ndarray, config: dict) -> list
     return result
 
 
-def _detect_bursts_meanap_isin(spike_times_s: np.ndarray, config: dict) -> dict:
-    """Bakkum ISI_N burst detection on a single unit's spike train, via
-    MEA-NAP's own meanap.pipeline.burst_detection (default method since
-    2026-07-13, see module docstring).
+def _detect_bursts_meanap_isin_single(spike_times_s: np.ndarray, config: dict) -> dict:
+    """Bakkum ISI_N burst detection on ONE unit's spike train, computed
+    standalone -- fallback for callers that don't have a channel-indexed
+    spike_times_dict for the whole recording (deposited Units, self-derived
+    `lupin` comparison path). For the primary MEA-NAP-native path, prefer
+    detect_bursts_meanap_isin_batch() below, which calls MEA-NAP's own
+    single_channel_burst_detection() ONCE per recording instead of
+    reimplementing its per-channel loop here.
 
     Returns a dict with T_start/T_end (seconds) and S (spike count) arrays,
-    one entry per detected burst -- MEA-NAP's own burst_info format,
-    passed through rather than converted to index pairs since
-    compute_spike_train_features only needs durations/spike-counts, not
-    indices, from either detector.
+    one entry per detected burst -- MEA-NAP's own burst_info format.
     """
     from meanap.pipeline.burst_detection import burst_detect_isin, get_isin_threshold
 
@@ -129,8 +130,48 @@ def _detect_bursts_meanap_isin(spike_times_s: np.ndarray, config: dict) -> dict:
     return burst_info
 
 
-def compute_spike_train_features(spike_times_s, duration_s: float, config: dict) -> dict:
+def detect_bursts_meanap_isin_batch(
+    spike_times_dict: dict[int, np.ndarray], n_channels: int, fs: float, duration_s: float, config: dict,
+) -> dict[int, dict]:
+    """Per-channel Bakkum ISI_N burst detection for a WHOLE recording in one
+    call, via MEA-NAP's own meanap.pipeline.burst_detection.
+    single_channel_burst_detection() directly -- the primary/default path
+    since the 2026-07-13 "unicamente MEA-NAP" pivot. Calling the batch
+    function once (instead of _detect_bursts_meanap_isin_single per unit)
+    avoids re-deriving the same "automatic" threshold logic MEA-NAP already
+    loops over internally, and is the same function network.py's
+    firing_rates_bursts() already calls under the hood for its own
+    network-burst computation -- one algorithm, one code path, reused
+    directly, not reimplemented per caller.
+
+    Returns {channel_idx: burst_info} where burst_info has T_start/T_end
+    (seconds) and S (spike count) arrays, ready for
+    compute_spike_train_features's burst_info parameter.
+    """
+    from meanap.pipeline.burst_detection import single_channel_burst_detection
+
+    min_spikes = require(config, "burst_detection.meanap_isi_n.min_spikes")
+    isi_threshold = require(config, "burst_detection.meanap_isi_n.isi_threshold")
+
+    burst_data = single_channel_burst_detection(
+        spike_times_dict, n_channels, fs, min_spikes=min_spikes,
+        isi_threshold=isi_threshold, recording_duration_s=duration_s,
+    )
+    empty = {"T_start": np.array([]), "T_end": np.array([]), "S": np.array([])}
+    return {ch: burst_data["burst_matrices"].get(ch, empty) for ch in range(n_channels)}
+
+
+def compute_spike_train_features(spike_times_s, duration_s: float, config: dict, burst_info: dict | None = None) -> dict:
     """Single-unit spike-train features. `spike_times_s` in seconds.
+
+    `burst_info` (optional): this unit's pre-computed burst dict (T_start/
+    T_end/S), e.g. from detect_bursts_meanap_isin_batch()'s per-channel
+    output -- pass this whenever a channel-indexed spike_times_dict for the
+    whole recording is available (the primary MEA-NAP-native path), so
+    burst detection runs once per recording, not once per unit. If omitted
+    and burst_detection.method is meanap_isi_n, falls back to computing it
+    standalone for this one unit (deposited Units / self-derived-sorting
+    paths, which don't have a natural channel index to batch over).
 
     Returns a dict of scalar features for this one unit. Use
     aggregate_spike_train_features() to combine many units into a
@@ -153,7 +194,8 @@ def compute_spike_train_features(spike_times_s, duration_s: float, config: dict)
 
     burst_method = require(config, "burst_detection.method")
     if burst_method == "meanap_isi_n":
-        burst_info = _detect_bursts_meanap_isin(spike_times_s, config)
+        if burst_info is None:
+            burst_info = _detect_bursts_meanap_isin_single(spike_times_s, config)
         burst_durations_s = np.asarray(burst_info["T_end"], dtype=float) - np.asarray(burst_info["T_start"], dtype=float)
         spikes_per_burst = np.asarray(burst_info["S"], dtype=int)
     elif burst_method == "max_interval":

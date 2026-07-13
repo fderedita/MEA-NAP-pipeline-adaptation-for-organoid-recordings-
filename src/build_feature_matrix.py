@@ -2,16 +2,17 @@
 
 One row per recording, columns = features from spike_train/network/spectral/
 complexity + metadata: dataset (lab/platform), organoid_id, DIV/age, well_id,
-spike_source in {deposited, self_derived_lupin_curated}, raw_provenance.
+spike_source in {deposited, mea_nap_threshold, self_derived_lupin_curated},
+raw_provenance.
 
-Spike-source policy is frozen in config/params.yaml `spike_detection` per
-the Stage 1 "Closing decision" (outputs/reports/stage1_validation.md):
-recordings with deposited Units use them directly; recordings without
-(DANDI:001872) fall back to curated `lupin` sorting. This module currently
-implements the deposited-Units path (DANDI:001603) and the
-spike_train + network feature blocks; spectral/complexity and the
-self-derived path are added incrementally in that order (see commit
-history).
+Spike-source policy is frozen in config/params.yaml `spike_detection`,
+2026-07-13 pivot: MEA-NAP threshold detection is now the uniform default for
+every recording with raw available (001603 HO1-HO4, all of 001872), so both
+datasets are measured the SAME way. HO5-HO8 (001603 "sourced" subjects) have
+no raw at all on DANDI and keep `deposited` as a forced exception (see
+config/params.yaml comment block for the full reasoning). The earlier
+deposited-Units-everywhere-available run is preserved as
+`feature_matrix_001603_deposited_only.parquet`, not deleted.
 
 Saves incrementally (one JSON checkpoint written after every recording, not
 just at the end) -- network features in particular are slow enough
@@ -33,17 +34,21 @@ from src.config import load_config, require
 from src.features.complexity import compute_complexity_features
 from src.features.network import compute_network_features
 from src.features.spectral import aggregate_spectral_features, compute_spectral_features_for_channel
-from src.features.spike_train import aggregate_spike_train_features, compute_spike_train_features
-from src.validate_pipeline import load_deposited_units
+from src.features.spike_train import (
+    aggregate_spike_train_features,
+    compute_spike_train_features,
+    detect_bursts_meanap_isin_batch,
+)
+from src.validate_pipeline import detect_spikes_full_recording, load_deposited_units
 
 DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
 
 # Age-matched raw file for each locally-mirrored units file among 001603's
 # "recorded" human subjects (HO1-HO4) -- NOT the same recording session
-# (raw and units sessions are ~minutes-to-days apart, matched only by
-# nominal `age` tag, see outputs/reports/stage0_inventory.md open
-# questions and stage1_validation.md's session-mismatch discussion).
+# (matched only by nominal `age` tag; confirmed gap is ~57min for HO1/HO4
+# vs ~4 days for HO2/HO3, which tracks their firing-rate Spearman rho --
+# see stage1_validation.md, "Most likely explanation" / 2026-07-13 addendum).
 # HO5-8 ("sourced" subjects) have no raw at all -- absent from this dict.
 _RAW_FILE_FOR_UNITS = {
     "sub-HO1_ses-20250924T002125.nwb": "sub-HO1_ses-20250924T011900_ecephys.nwb",
@@ -57,6 +62,14 @@ _RAW_FILE_FOR_UNITS = {
     "sub-HO3_ses-20250916T190928.nwb": "sub-HO3_ses-20250912T144846_ecephys.nwb",  # P8MT4H
     "sub-HO4_ses-20250924T002126.nwb": "sub-HO4_ses-20250924T011900_ecephys.nwb",
 }
+
+# HO1-HO4's raw files, grouped by subject (derived from _RAW_FILE_FOR_UNITS'
+# values, one source of truth) -- these are the recordings MEA-NAP threshold
+# detection runs on directly, per the 2026-07-13 policy pivot.
+_MEA_NAP_RAW_FILES: dict[str, list[str]] = {}
+for _raw_fname in _RAW_FILE_FOR_UNITS.values():
+    _subject_id = _raw_fname.split("_")[0].replace("sub-", "")
+    _MEA_NAP_RAW_FILES.setdefault(_subject_id, []).append(_raw_fname)
 
 
 def _process_spectral_channel_batch(raw_path: str, ch_indices: list[int], config: dict) -> dict[int, dict]:
@@ -136,12 +149,19 @@ _HO_UNITS_FILES = {
 }
 
 
-def discover_001603_deposited_recordings() -> list[dict]:
-    """List (subject_id, units_path) pairs for every locally-mirrored
-    deposited-Units file among 001603's human subjects."""
+def discover_001603_recordings() -> list[dict]:
+    """List recording specs for 001603's human subjects, per the 2026-07-13
+    policy: HO1-HO4 (raw available) get a `raw_path` spec (MEA-NAP
+    threshold detection); HO5-HO8 (no raw on DANDI) keep a `units_path`
+    spec (deposited Units, forced exception)."""
     recordings = []
-    for subject_id, filenames in _HO_UNITS_FILES.items():
+    for subject_id, filenames in _MEA_NAP_RAW_FILES.items():
         for fname in filenames:
+            path = DATA_RAW / fname
+            if path.exists():
+                recordings.append({"subject_id": subject_id, "raw_path": str(path), "dataset_id": "001603"})
+    for subject_id in ("HO5", "HO6", "HO7", "HO8"):
+        for fname in _HO_UNITS_FILES.get(subject_id, []):
             path = DATA_RAW / fname
             if path.exists():
                 recordings.append({"subject_id": subject_id, "units_path": str(path), "dataset_id": "001603"})
@@ -195,8 +215,51 @@ def process_deposited_recording(subject_id: str, units_path: str, config: dict) 
     return row
 
 
+def process_meanap_recording(subject_id: str, raw_path: str, config: dict) -> dict:
+    """One feature-matrix row using MEA-NAP threshold detection directly on
+    the raw ElectricalSeries -- the 2026-07-13 default for any recording
+    with raw available (HO1-HO4 here; all of 001872 in
+    build_feature_matrix_001872_meanap.py). MUA-level, not SUA: spike_times
+    are per-channel, not per-curated-unit."""
+    meta = _units_metadata(raw_path)
+    detected = detect_spikes_full_recording(raw_path, config)
+    spike_times_dict = detected["spike_times"]
+    duration_s = detected["duration_s"]
+
+    burst_info_by_ch = detect_bursts_meanap_isin_batch(
+        spike_times_dict, detected["n_channels"], detected["fs"], duration_s, config
+    )
+    per_unit_features = [
+        compute_spike_train_features(st, duration_s, config, burst_info=burst_info_by_ch.get(ch))
+        for ch, st in spike_times_dict.items()
+    ]
+    agg = aggregate_spike_train_features(per_unit_features)
+
+    network_feats = compute_network_features(
+        spike_times_dict, detected["n_channels"], detected["fs"], duration_s, config
+    )
+    spectral_feats = compute_spectral_features_for_recording(raw_path, config)
+    complexity_feats = compute_complexity_features(spike_times_dict, duration_s, config)
+
+    row = {
+        "dataset_id": "001603",
+        "organoid_id": subject_id,
+        "recording_path": raw_path,
+        "spike_source": "mea_nap_threshold",
+        "duration_s": duration_s,
+        "n_channels": detected["n_channels"],
+        **meta,
+    }
+    row.update({f"spike_train__{k}": v for k, v in agg.items()})
+    row.update(network_feats)
+    row.update(spectral_feats)
+    row.update({f"complexity__{k}": v for k, v in complexity_feats.items()})
+    return row
+
+
 def _row_key(rec: dict) -> str:
-    return f"{rec['subject_id']}::{Path(rec['units_path']).name}"
+    path = rec.get("raw_path") or rec["units_path"]
+    return f"{rec['subject_id']}::{Path(path).name}"
 
 
 def build_feature_matrix(
@@ -206,8 +269,8 @@ def build_feature_matrix(
     checkpoint after every recording so a long run can resume.
 
     Each spec must have at minimum `subject_id`, `dataset_id`, and either
-    `units_path` (deposited path) or a raw path + spike_source for the
-    self-derived path (not yet implemented here -- see module docstring).
+    `raw_path` (MEA-NAP threshold detection) or `units_path` (deposited
+    Units, forced exception for HO5-HO8).
     """
     rows_by_key: dict[str, dict] = {}
     if checkpoint_path and checkpoint_path.exists():
@@ -220,12 +283,12 @@ def build_feature_matrix(
             print(f"  {key} (skipping, already done)", flush=True)
             continue
         print(f"  {key} ...", flush=True)
-        if "units_path" in rec:
+        if "raw_path" in rec:
+            row = process_meanap_recording(rec["subject_id"], rec["raw_path"], config)
+        elif "units_path" in rec:
             row = process_deposited_recording(rec["subject_id"], rec["units_path"], config)
         else:
-            raise NotImplementedError(
-                f"Self-derived (non-deposited) recordings not yet wired into build_feature_matrix: {rec}"
-            )
+            raise NotImplementedError(f"Recording spec has neither raw_path nor units_path: {rec}")
         rows_by_key[key] = row
         if checkpoint_path:
             checkpoint_path.write_text(json.dumps(rows_by_key, indent=2, default=float), encoding="utf-8")
@@ -285,8 +348,10 @@ def main():
     config = load_config()
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    recordings = discover_001603_deposited_recordings()
-    print(f"Found {len(recordings)} locally-mirrored deposited-Units recordings in 001603", flush=True)
+    recordings = discover_001603_recordings()
+    print(f"Found {len(recordings)} locally-mirrored recordings in 001603 "
+          f"({sum('raw_path' in r for r in recordings)} MEA-NAP, "
+          f"{sum('units_path' in r for r in recordings)} deposited-only)", flush=True)
 
     checkpoint_path = FEATURES_DIR / "_checkpoint_001603.json"
     df = build_feature_matrix(recordings, config, checkpoint_path=checkpoint_path)
