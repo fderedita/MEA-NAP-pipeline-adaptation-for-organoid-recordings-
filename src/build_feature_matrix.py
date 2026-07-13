@@ -22,6 +22,8 @@ lesson learned in Stage 1 (see notebooks/run_stage1_validation.py).
 from __future__ import annotations
 
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -29,11 +31,76 @@ import pandas as pd
 
 from src.config import load_config, require
 from src.features.network import compute_network_features
+from src.features.spectral import aggregate_spectral_features, compute_spectral_features_for_channel
 from src.features.spike_train import aggregate_spike_train_features, compute_spike_train_features
 from src.validate_pipeline import load_deposited_units
 
 DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
+
+# Age-matched raw file for each locally-mirrored units file among 001603's
+# "recorded" human subjects (HO1-HO4) -- NOT the same recording session
+# (raw and units sessions are ~minutes-to-days apart, matched only by
+# nominal `age` tag, see outputs/reports/stage0_inventory.md open
+# questions and stage1_validation.md's session-mismatch discussion).
+# HO5-8 ("sourced" subjects) have no raw at all -- absent from this dict.
+_RAW_FILE_FOR_UNITS = {
+    "sub-HO1_ses-20250924T002125.nwb": "sub-HO1_ses-20250924T011900_ecephys.nwb",
+    "sub-HO2_ses-20250916T190936.nwb": "sub-HO2_ses-20250912T144835_obj-9jlzq1_ecephys.nwb",  # P6M
+    "sub-HO2_ses-20250916T190927_obj-1s1jcwl.nwb": "sub-HO2_ses-20250912T144839_ecephys.nwb",  # P7M
+    "sub-HO2_ses-20250916T190928_obj-86y47o.nwb": "sub-HO2_ses-20250912T144837_ecephys.nwb",  # P8M
+    "sub-HO2_ses-20250916T190927_obj-vm83mt.nwb": "sub-HO2_ses-20250912T144835_obj-77d92a_ecephys.nwb",  # P8MT4H
+    "sub-HO3_ses-20250916T190937.nwb": "sub-HO3_ses-20250912T144841_ecephys.nwb",  # P6M
+    "sub-HO3_ses-20250916T190930_obj-2sqh9d.nwb": "sub-HO3_ses-20250912T150817_ecephys.nwb",  # P7M
+    "sub-HO3_ses-20250916T190930_obj-ikzmsj.nwb": "sub-HO3_ses-20250912T144835_obj-1hc8buj_ecephys.nwb",  # P8M
+    "sub-HO3_ses-20250916T190928.nwb": "sub-HO3_ses-20250912T144846_ecephys.nwb",  # P8MT4H
+    "sub-HO4_ses-20250924T002126.nwb": "sub-HO4_ses-20250924T011900_ecephys.nwb",
+}
+
+
+def _process_spectral_channel_batch(raw_path: str, ch_indices: list[int], config: dict) -> dict[int, dict]:
+    """Worker (own process): opens its own NWB handle, computes spectral
+    features for a batch of channels. Mirrors validate_pipeline.py's
+    per-channel parallelization pattern."""
+    from pynwb import NWBHDF5IO
+
+    io = NWBHDF5IO(raw_path, mode="r")
+    try:
+        nwbfile = io.read()
+        ts = nwbfile.acquisition["ElectricalSeries"]
+        fs = float(ts.rate)
+        results = {}
+        for ch_idx in ch_indices:
+            trace = ts.data[:, ch_idx].astype(float)
+            results[ch_idx] = compute_spectral_features_for_channel(trace, fs, config)
+        return results
+    finally:
+        io.close()
+
+
+def compute_spectral_features_for_recording(raw_path: str, config: dict, n_workers: int | None = None) -> dict:
+    """Spectral feature block for a full recording, parallelized across channels."""
+    from pynwb import NWBHDF5IO
+
+    io = NWBHDF5IO(raw_path, mode="r")
+    try:
+        nwbfile = io.read()
+        n_channels = nwbfile.acquisition["ElectricalSeries"].data.shape[1]
+    finally:
+        io.close()
+
+    if n_workers is None:
+        n_workers = min(6, max(1, (os.cpu_count() or 4) - 2))
+
+    chunks = [c.tolist() for c in np.array_split(np.arange(n_channels), n_workers) if len(c) > 0]
+    per_channel: dict[int, dict] = {}
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = [executor.submit(_process_spectral_channel_batch, raw_path, chunk, config) for chunk in chunks]
+        for future in as_completed(futures):
+            per_channel.update(future.result())
+
+    ordered = [per_channel[i] for i in sorted(per_channel)]
+    return {f"spectral__{k}": v for k, v in aggregate_spectral_features(ordered).items()}
 
 # DANDI:001603's human subjects all use MaxWell MaxOne at a fixed 20kHz
 # sampling rate (confirmed in Stage 0's settings audit,
@@ -166,6 +233,32 @@ def build_feature_matrix(
     return pd.DataFrame(list(rows_by_key.values()))
 
 
+def add_spectral_features(checkpoint_path: Path, config: dict) -> None:
+    """Enrich the existing checkpoint's rows with spectral features, for
+    recordings that have an age-matched raw file (_RAW_FILE_FOR_UNITS).
+    Does NOT recompute spike_train/network (already cached) -- reads the
+    checkpoint, adds spectral__* keys to applicable rows, re-saves after
+    every recording (spectral is ~40min/recording at full scale, parallelized
+    down from that -- still long enough to want incremental saving).
+    """
+    rows_by_key = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    for key, row in rows_by_key.items():
+        if any(k.startswith("spectral__") for k in row):
+            print(f"  {key} (spectral already done, skipping)", flush=True)
+            continue
+        units_fname = Path(row["recording_path"]).name
+        raw_fname = _RAW_FILE_FOR_UNITS.get(units_fname)
+        if raw_fname is None:
+            print(f"  {key} (no raw available, no spectral features -- expected for sourced subjects)", flush=True)
+            continue
+        raw_path = str(DATA_RAW / raw_fname)
+        print(f"  {key} <- {raw_fname} ...", flush=True)
+        spectral_feats = compute_spectral_features_for_recording(raw_path, config)
+        row.update(spectral_feats)
+        checkpoint_path.write_text(json.dumps(rows_by_key, indent=2, default=float), encoding="utf-8")
+        print(f"    (saved checkpoint)", flush=True)
+
+
 def main():
     config = load_config()
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,6 +268,10 @@ def main():
 
     checkpoint_path = FEATURES_DIR / "_checkpoint_001603.json"
     df = build_feature_matrix(recordings, config, checkpoint_path=checkpoint_path)
+
+    print("\nAdding spectral features where a raw file is available...", flush=True)
+    add_spectral_features(checkpoint_path, config)
+    df = pd.DataFrame(list(json.loads(checkpoint_path.read_text(encoding="utf-8")).values()))
 
     out_path = FEATURES_DIR / "feature_matrix_001603.parquet"
     df.to_parquet(out_path, index=False)
