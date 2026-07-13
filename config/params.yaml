@@ -48,24 +48,38 @@ spike_detection:
   # STAGE 1 CLOSED 2026-07-10 (human decision, see outputs/reports/stage1_validation.md
   # "Closing decision"). Four methods tried (threshold, wavelet, uncurated
   # lupin sorter, curated lupin sorter) -- none met the acceptance criteria
-  # below on per-electrode rate/burst correlation, most likely because no
-  # 001603 subject has a raw+deposited-Units pair from the literal same
-  # recording session (caps achievable electrode-level agreement regardless
-  # of method). Curation DID fix aggregate/population-level statistics
-  # substantially. Frozen policy for Stage 2 (do not re-litigate per
-  # recording):
-  #   - Subject/recording HAS deposited Units (001603 recorded + sourced
-  #     subjects): use the deposited Units directly. Do not re-derive.
-  #   - Subject/recording has NO deposited Units (001872, and any future
-  #     recording without ground truth): self-derived via the curated
-  #     `lupin` sorter (below) -- the best-validated self-derived method
-  #     found, even though per-electrode ranking wasn't recoverable in
-  #     testing. Trust aggregate/population-level features from it; do not
-  #     over-interpret per-electrode unit identity.
+  # below on per-electrode rate/burst correlation. The 2026-07-13 addendum to
+  # that report found this is quantitatively explained by raw/deposited-Units
+  # session gap (HO1/HO4 ~57min apart -> higher rho; HO2/HO3 ~4 days apart ->
+  # lower rho), not method quality -- i.e. deposited Units and any self-
+  # derived method are measuring the SAME underlying activity at DIFFERENT
+  # points in time, which no method can reconcile.
+  #
+  # PIVOT 2026-07-13 (human decision): given that finding, mixing deposited
+  # Units (SUA, curated, from a DIFFERENT session) with self-derived spikes
+  # (MUA or curated SUA) for different recordings/datasets introduces a
+  # bigger, unlabelled confound than using ONE uniform detection method
+  # everywhere. Frozen policy for Stage 2 (do not re-litigate per recording):
+  #   - Default for ANY recording with raw available (001603 HO1-HO4,
+  #     all of 001872): MEA-NAP threshold detection (`mea_nap_threshold`
+  #     below) -- same method, same code path, same params, across both
+  #     datasets and both platforms (MaxOne/MaxTwo). This is MUA-level, not
+  #     SUA -- population/aggregate features are the primary intended use;
+  #     do not over-interpret per-electrode unit identity.
+  #   - Exception, forced by data availability, not choice: 001603's
+  #     "sourced" subjects (HO5-HO8) have NO raw file deposited on DANDI at
+  #     all -- MEA-NAP cannot run. These 4 rows keep `spike_source:
+  #     deposited` as the only option that exists, documented explicitly as
+  #     an exception, not silently mixed in.
+  #   - The prior policy (deposited-where-available, curated `lupin`
+  #     sorting elsewhere) is preserved as `feature_matrix_001603_deposited_
+  #     only.parquet` / `feature_matrix_001872.parquet` (self-derived-sorter
+  #     run, kept for comparison, not deleted) -- see outputs/features/.
   #   - Every Stage 2 feature row must carry a `spike_source` field
-  #     (`deposited` | `self_derived_lupin_curated`) -- never mixed silently.
-  method: self_derived_lupin_curated  # {deposited, self_derived_lupin_curated} -- selected per recording, see above
-  sorter_name: lupin                  # spikeinterface CPU sorter (fastest + most units in feasibility testing)
+  #     (`deposited` | `mea_nap_threshold` | `self_derived_lupin_curated`)
+  #     -- never mixed silently.
+  method: mea_nap_threshold  # {deposited, mea_nap_threshold, self_derived_lupin_curated} -- selected per recording, see above
+  sorter_name: lupin                  # spikeinterface CPU sorter (fastest + most units in feasibility testing) -- kept for the self_derived_lupin_curated comparison run
   curation:
     # Matches the deposited ground truth's own curation criteria exactly
     # (per the HO1 notebook exploration's file metadata), so self-derived
@@ -107,7 +121,22 @@ active_electrode_criterion:
   min_firing_rate_hz: null
 
 burst_detection:
-  method: max_interval              # Max-Interval method, per handoff 4.1
+  # PIVOT 2026-07-13 (human decision, part of the "unicamente MEA-NAP"
+  # policy -- see spike_detection above): per-unit/per-channel burst
+  # detection now uses MEA-NAP's own single_channel_burst_detection()
+  # (meanap.pipeline.burst_detection), the Bakkum ISI_N method -- the same
+  # algorithm already used for network-level bursts in features/network.py
+  # (meanap.pipeline.firing_rates.firing_rates_bursts). One burst-detection
+  # method everywhere, not two different ones for channel vs. network level.
+  method: meanap_isi_n              # {max_interval, meanap_isi_n} -- meanap_isi_n is the active default
+  # MEA-NAP's own defaults (meanap.params.Params.single_channel_burst_min_spike
+  # / single_channel_isi_threshold), reused directly rather than re-deriving.
+  meanap_isi_n:
+    min_spikes: 5
+    isi_threshold: automatic         # "automatic" (MEA-NAP's adaptive threshold) or a fixed float in seconds
+  # Superseded by meanap_isi_n above; kept only as a record of the original
+  # handoff-specified method (Task 4.1) and for _detect_bursts_max_interval's
+  # continued presence in spike_train.py as an available-but-unused function.
   # Widely-cited defaults for the classic Max Interval burst detector
   # (NeuroExplorer/Axion convention; see Cotterill & Eglen 2019, "Burst
   # Detection Methods", Front. Comput. Neurosci. for a review citing these
@@ -132,6 +161,16 @@ network:
     tail: 0.05                      # MEA-NAP's prob_thresh_tail default (one-sided upper-tail significance)
 
 spectral:
+  # SCOPE NOTE (2026-07-13, human decision): spectral/aperiodic features are
+  # NOT part of MEA-NAP (verified against Sit et al. 2024, Cell Reports
+  # Methods -- no spectral/FOOOF/aperiodic content in that paper). Under the
+  # "unicamente MEA-NAP" Stage 2 policy (see spike_detection above), this
+  # block is computed and saved to the feature matrix (real scientific
+  # value, explicitly requested by the handoff as a maturation/E-I proxy)
+  # but is SUPPLEMENTARY, not part of the primary MEA-NAP-native feature set
+  # that feeds Stage 3-5 by default. Keep computing; don't feed to Stage 3-5
+  # without an explicit, separate decision to include it.
+  #
   # 300Hz lowpass -> 1000Hz downsample target leaves a healthy margin below
   # the new Nyquist (500Hz), standard convention for organoid/cortical LFP
   # (activity of interest is well under 100Hz; 300Hz cutoff avoids
@@ -149,6 +188,12 @@ spectral:
     aperiodic_mode: fixed           # {fixed, knee}
 
 complexity:
+  # SCOPE NOTE (2026-07-13, human decision): same status as spectral above
+  # -- complexity/criticality features (avalanches, branching ratio,
+  # entropy, Lempel-Ziv) are NOT part of MEA-NAP either (verified, no such
+  # content in Sit et al. 2024). Computed and saved, but SUPPLEMENTARY, not
+  # in the primary MEA-NAP-native set that feeds Stage 3-5 by default.
+  #
   # Avalanche bin width: adaptive (mean inter-event interval of the pooled
   # population spike train), NOT a fixed ms value -- this is the standard
   # convention since Beggs & Plenz 2003 and used across the great majority

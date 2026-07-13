@@ -1,15 +1,25 @@
 """Stage 2.1 — single-unit / spike-train features.
 
 MFR, ISI mean/CV/skew, % spikes in bursts, intra-burst frequency, burst
-rate/duration/spikes-per-burst (Max-Interval method), local variation Lv
-(Elephant). Aggregated per recording (mean + dispersion across units).
+rate/duration/spikes-per-burst, local variation Lv (Elephant). Aggregated
+per recording (mean + dispersion across units).
+
+Burst detection method is config-selected (`burst_detection.method`):
+`meanap_isi_n` (default since the 2026-07-13 "unicamente MEA-NAP" pivot --
+reuses meanap.pipeline.burst_detection.burst_detect_isin, the same Bakkum
+ISI_N algorithm already used for network-level bursts in features/
+network.py, so per-unit and per-network bursts now share one method) or
+`max_interval` (the original handoff-Task-4.1 method, kept available for
+comparison, not the active default -- see config/params.yaml
+burst_detection comment for the full history).
 
 Spike source (deposited Kilosort2 Units vs self-derived curated `lupin`
-sorting) is a per-recording upstream decision -- see
-config/params.yaml `spike_detection` and
-outputs/reports/stage1_validation.md "Closing decision". This module only
-consumes spike times; it doesn't care where they came from, but callers
-must carry the `spike_source` label through to the feature matrix.
+sorting vs MEA-NAP threshold detection) is a per-recording upstream
+decision -- see config/params.yaml `spike_detection` and
+outputs/reports/stage1_validation.md "Closing decision" / "Second
+addendum". This module only consumes spike times; it doesn't care where
+they came from, but callers must carry the `spike_source` label through to
+the feature matrix.
 """
 from __future__ import annotations
 
@@ -22,6 +32,8 @@ from src.config import require
 
 def _detect_bursts_max_interval(spike_times_s: np.ndarray, config: dict) -> list[tuple[int, int]]:
     """Max-Interval burst detection on a single unit's spike train.
+    Superseded by _detect_bursts_meanap_isin as the default (see module
+    docstring); kept for comparison, not deleted.
 
     Returns a list of (start_index, end_index) inclusive index pairs into
     spike_times_s, one per detected burst.
@@ -84,6 +96,39 @@ def _detect_bursts_max_interval(spike_times_s: np.ndarray, config: dict) -> list
     return result
 
 
+def _detect_bursts_meanap_isin(spike_times_s: np.ndarray, config: dict) -> dict:
+    """Bakkum ISI_N burst detection on a single unit's spike train, via
+    MEA-NAP's own meanap.pipeline.burst_detection (default method since
+    2026-07-13, see module docstring).
+
+    Returns a dict with T_start/T_end (seconds) and S (spike count) arrays,
+    one entry per detected burst -- MEA-NAP's own burst_info format,
+    passed through rather than converted to index pairs since
+    compute_spike_train_features only needs durations/spike-counts, not
+    indices, from either detector.
+    """
+    from meanap.pipeline.burst_detection import burst_detect_isin, get_isin_threshold
+
+    min_spikes = require(config, "burst_detection.meanap_isi_n.min_spikes")
+    isi_threshold = require(config, "burst_detection.meanap_isi_n.isi_threshold")
+
+    n = len(spike_times_s)
+    if n < min_spikes:
+        return {"T_start": np.array([]), "T_end": np.array([]), "S": np.array([])}
+
+    if str(isi_threshold).lower() == "automatic":
+        min_unique_itis = 10
+        if len(np.unique(np.diff(spike_times_s))) > min_unique_itis:
+            isin_th = get_isin_threshold(spike_times_s, n=min_spikes)
+        else:
+            isin_th = 0.1
+    else:
+        isin_th = float(isi_threshold)
+
+    burst_info, _ = burst_detect_isin(spike_times_s, min_spikes, isin_th)
+    return burst_info
+
+
 def compute_spike_train_features(spike_times_s, duration_s: float, config: dict) -> dict:
     """Single-unit spike-train features. `spike_times_s` in seconds.
 
@@ -106,13 +151,22 @@ def compute_spike_train_features(spike_times_s, duration_s: float, config: dict)
     else:
         isi_mean_s = isi_cv = isi_skew = local_variation = np.nan
 
-    bursts = _detect_bursts_max_interval(spike_times_s, config)
-    n_bursts = len(bursts)
+    burst_method = require(config, "burst_detection.method")
+    if burst_method == "meanap_isi_n":
+        burst_info = _detect_bursts_meanap_isin(spike_times_s, config)
+        burst_durations_s = np.asarray(burst_info["T_end"], dtype=float) - np.asarray(burst_info["T_start"], dtype=float)
+        spikes_per_burst = np.asarray(burst_info["S"], dtype=int)
+    elif burst_method == "max_interval":
+        bursts = _detect_bursts_max_interval(spike_times_s, config)
+        burst_durations_s = np.array([spike_times_s[e] - spike_times_s[s] for s, e in bursts])
+        spikes_per_burst = np.array([e - s + 1 for s, e in bursts])
+    else:
+        raise ValueError(f"Unknown burst_detection.method: {burst_method!r}")
+
+    n_bursts = len(spikes_per_burst)
     burst_rate_hz = n_bursts / duration_s if duration_s > 0 else np.nan
 
     if n_bursts > 0:
-        burst_durations_s = np.array([spike_times_s[e] - spike_times_s[s] for s, e in bursts])
-        spikes_per_burst = np.array([e - s + 1 for s, e in bursts])
         n_spikes_in_bursts = int(np.sum(spikes_per_burst))
         pct_spikes_in_bursts = 100.0 * n_spikes_in_bursts / n_spikes if n_spikes > 0 else np.nan
         # intra-burst frequency: (spikes-1)/duration for each burst, averaged
