@@ -1,18 +1,26 @@
 """Stage 2 orchestrator — assembles outputs/features/feature_matrix.parquet.
 
+SUPERSEDED as the primary Stage 2 path (2026-07-13, second pivot same day):
+see src/run_meanap_pipeline.py, which runs MEA-NAP's own run_pipeline()
+end-to-end instead of calling features/*.py piecemeal. This module is now
+used ONLY for HO5-HO8's forced `deposited` exception (001603 "sourced"
+subjects with no raw on DANDI at all -- MEA-NAP cannot run without raw) --
+process_deposited_recording() is still the active code path for those 4
+subjects. Everything else in this file (the mea_nap_threshold path,
+process_meanap_recording(), discover_001603_recordings()) is historical,
+kept for the comparison output already on disk
+(feature_matrix_001603.parquet), not re-run.
+
 One row per recording, columns = features from spike_train/network/spectral/
 complexity + metadata: dataset (lab/platform), organoid_id, DIV/age, well_id,
 spike_source in {deposited, mea_nap_threshold, self_derived_lupin_curated},
 raw_provenance.
 
-Spike-source policy is frozen in config/params.yaml `spike_detection`,
-2026-07-13 pivot: MEA-NAP threshold detection is now the uniform default for
-every recording with raw available (001603 HO1-HO4, all of 001872), so both
-datasets are measured the SAME way. HO5-HO8 (001603 "sourced" subjects) have
-no raw at all on DANDI and keep `deposited` as a forced exception (see
-config/params.yaml comment block for the full reasoning). The earlier
-deposited-Units-everywhere-available run is preserved as
-`feature_matrix_001603_deposited_only.parquet`, not deleted.
+Spike-source policy is frozen in config/params.yaml `spike_detection`. The
+earlier deposited-Units-everywhere-available run is preserved as
+`feature_matrix_001603_deposited_only.parquet`, not deleted -- see
+outputs/reports/stage1_validation.md's "Second"/"Third addendum" for the
+full pivot history.
 
 Saves incrementally (one JSON checkpoint written after every recording, not
 just at the end) -- network features in particular are slow enough

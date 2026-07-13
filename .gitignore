@@ -2,10 +2,19 @@
 data/raw/**
 !data/raw/.gitkeep
 
+# MEA-NAP-format conversions of the above (also large, also derived, never commit)
+data/meanap_mat/**
+!data/meanap_mat/.gitkeep
+
 # Large generated outputs (features/figures can be big; manifests/reports are text and tracked)
 outputs/features/*.parquet
 outputs/figures/*.png
 outputs/figures/*.pdf
+
+# MEA-NAP's own pipeline output (large binary .npz + plots mixed with the CSVs we
+# actually want -- exclude the whole OutputData tree, keep the small spreadsheet
+# (outputs/meanap_pipeline/recordings.csv) tracked for reproducibility)
+outputs/meanap_pipeline/OutputData/**
 
 # Python
 __pycache__/

@@ -39,18 +39,32 @@ config/params.yaml            all frozen parameters
 src/io_dandi.py                DANDI asset discovery + streaming/download
 src/inventory.py               Stage 0 manifest builder
 src/validate_pipeline.py       Stage 1 pipeline validation vs ground truth
+src/io_nwb_convert.py          NWB -> MEA-NAP .mat converter (Stage 2, current path)
+src/run_meanap_pipeline.py     Stage 2 orchestrator, current path -- runs MEA-NAP's
+                                own run_pipeline() end-to-end (Steps 1-4) on every
+                                recording with raw available (see docs/technical_overview.md
+                                Sec 3.4 for the 2026-07-13 architecture history)
+src/build_feature_matrix.py    Stage 2, HO5-8 deposited-Units exception only
+                                (no raw on DANDI for those 4 subjects) + superseded
+                                piecemeal-MEA-NAP-calls path, kept for comparison
 src/features/                  Stage 2 feature extractors (spike/network/spectral/complexity)
-src/build_feature_matrix.py    Stage 2 orchestrator
+                                -- superseded as the primary path by run_meanap_pipeline.py,
+                                spectral/complexity have no MEA-NAP equivalent (supplementary only)
 src/batch_effect.py            Stage 3 batch-effect characterization
 src/harmonize.py               Stage 4 ComBat harmonization test
 src/reference.py               Stage 5 canonical cortical reference + manifold
 src/provenance.py              git commit hash / config hash stamping helpers
 notebooks/                     exploratory notebooks, one per stage
 outputs/manifests/             Stage 0 manifests
-outputs/features/              Stage 2 feature matrices
+outputs/meanap_pipeline/       Stage 2 output, current path -- MEA-NAP's own native
+                                CSV/JSON structure (NOT a consolidated Parquet --
+                                that step was deliberately dropped, see
+                                docs/technical_overview.md Sec 3.4/3.5)
+outputs/features/              Stage 2 output, superseded paths (Parquet), kept for comparison
 outputs/figures/                figures
 outputs/reports/               per-stage markdown reports (checkpoints)
 data/raw/                      local mirror of prioritised raw NWB files (gitignored)
+data/meanap_mat/               NWB/BRW files converted to MEA-NAP's .mat format (gitignored)
 tests/                         unit tests for feature functions
 ```
 

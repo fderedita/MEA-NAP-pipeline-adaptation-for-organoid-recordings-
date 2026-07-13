@@ -2,8 +2,6 @@
 ## Human cortical organoid MEA (raw): DANDI:001603 + DANDI:001872
 
 **Owner:** Francesca (Lodato lab, Humanitas) · **Date:** 8 July 2026
-**Agent:** Claude Code · **Language of code comments:** English · **Interaction:** Italian OK
-
 ---
 
 ## 0. Context & non-negotiable framing (read before coding)
@@ -128,6 +126,39 @@ Once the manifest confirms which files are raw human cortical, **download** thos
 ---
 
 ## 4. Stage 2 — Unified feature extraction (both datasets, identical params)
+
+> **Amendment, 2026-07-13 (human decision):** the spike-source approach
+> below (deposited-where-present, self-derived elsewhere) was implemented
+> first, then revised after Stage 1 found that per-electrode validation
+> failures were better explained by raw/Units session-gap than by method
+> quality (see `outputs/reports/stage1_validation.md`, "Second addendum").
+> Mixing detection methods across the two datasets was judged a bigger,
+> less controlled confound than this handoff's own goal of neutralizing
+> the lab/platform confound. Stage 2 now uses ONE uniform method (MEA-NAP
+> threshold detection) on every recording with raw available, with
+> deposited Units kept only as a forced exception for the 4 subjects
+> (HO5-HO8) that have no raw at all. Not a rejection of the "always
+> labelled" principle below -- `spike_source` is still mandatory on every
+> row -- just a different default.
+>
+> **Second amendment, same day:** pushed further to "use MEA-NAP itself,
+> not just its algorithms" -- Stage 2 now runs MEA-NAP's own
+> `run_pipeline()` end-to-end (Steps 1-4) via a new `src/io_nwb_convert.py`
+> (NWB -> the `.mat` format MEA-NAP's I/O layer requires) +
+> `src/run_meanap_pipeline.py`, instead of `build_feature_matrix.py`
+> calling individual `features/*.py` functions. This surfaces MEA-NAP's
+> full default metric set (modularity, node cartography, participation
+> coefficient, small-worldness, rich club -- not just the deterministic
+> subset 4.2 below originally scoped) at no extra integration cost. **4.5's
+> `feature_matrix.parquet` is also superseded** -- Stage 2's output is now
+> MEA-NAP's own native CSVs under `outputs/meanap_pipeline/OutputData/`;
+> Stage 3-5 will read those directly (with a light pivot/join, done in
+> Stage 3-5 itself) rather than a pre-built consolidated matrix.
+> `features/spectral.py`/`features/complexity.py` (4.3/4.4) have no MEA-NAP
+> equivalent and are kept only as supplementary, non-primary computations.
+> See `config/params.yaml` `spike_detection`, `outputs/reports/
+> stage1_validation.md`'s "Third addendum", and `docs/technical_overview.md`
+> §3.4 for the current, final policy.
 
 **Objective:** one tidy feature matrix, rows = recordings, columns = features, with provenance metadata. Same battery, same parameters, applied to both datasets from the **raw** (using deposited Units where present for the spike-based block, self-derived where not — always labelled).
 

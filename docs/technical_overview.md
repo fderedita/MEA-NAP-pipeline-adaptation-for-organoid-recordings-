@@ -1,11 +1,5 @@
 # Documentazione tecnica — organoid-mea-foundation
 
-> Documento di riferimento per chiunque debba capire, spiegare o continuare
-> questo progetto senza aver seguito lo sviluppo passo passo. Scritto per
-> essere letto in ordine, dall'alto verso il basso.
-
----
-
 ## 1. Panoramica del progetto
 
 ### 1.1 Scopo
@@ -47,15 +41,13 @@ per questo esiste già un modulo dedicato (§3.6).
 
 ### 1.3 Architettura generale: pipeline a stadi
 
-Il progetto segue un piano a **stadi sequenziali**, ciascuno con un
-"checkpoint" in cui il lavoro si ferma per revisione umana prima di
-proseguire (definito nel documento originale `docs/handoff_foundation_phase.md`):
+Il progetto segue un piano a **stadi sequenziali**:
 
 ```
 Stage 0  → inventario dei dati (quanti soggetti, che impostazioni hardware)
 Stage 0.5 → download mirato dei file grezzi prioritari
 Stage 1  → validazione: il nostro metodo di rilevamento spike funziona?
-Stage 2  → estrazione di feature elettrofisiologiche (IN CORSO ORA)
+Stage 2  → estrazione di feature elettrofisiologiche 
 Stage 3  → quanto le feature dipendono dal laboratorio vs dalla biologia?
 Stage 4  → correzione statistica dell'effetto laboratorio
 Stage 5  → firma di riferimento corticale finale
@@ -71,16 +63,16 @@ Lo stato attuale è documentato in dettaglio al §7.
 | `io_dandi.py` | Scarica/streamma metadati e file da DANDI |
 | `inventory.py` | Costruisce l'inventario dei dataset (Stage 0) |
 | `mirror_priority.py` | Script una-tantum per scaricare il sottoinsieme prioritario di file grezzi |
-| `validate_pipeline.py` | Confronta rilevamento spike "fatto da noi" contro le Units già depositate (Stage 1) |
-| `self_derived_sorting.py` | Esegue sorting + curazione di qualità quando NON esistono Units depositate |
-| `io_brainwave.py` | Legge/converte file 3Brain `.brw` per il laboratorio |
-| `features/spike_train.py` | Feature per singola unità: tasso di scarica, ISI, burst |
-| `features/network.py` | Feature di rete: connettività STTC, metriche di grafo |
-| `features/spectral.py` | Feature spettrali: LFP, PSD, esponente aperiodico (FOOOF) |
-| `features/complexity.py` | Feature di criticità: avalanche, entropia, complessità di Lempel-Ziv |
-| `build_feature_matrix.py` | Orchestratore: assembla tutte le feature per `DANDI:001603` |
-| `build_feature_matrix_001872.py` | Come sopra, per `DANDI:001872` (percorso più lento, serve sorting) |
-| `batch_effect.py`, `harmonize.py`, `reference.py` | Stage 3-5, non ancora implementati |
+| `validate_pipeline.py` | Confronta rilevamento spike "fatto da noi" contro le Units già depositate (Stage 1); contiene anche `detect_spikes_full_recording()`, usato da Stage 1 e dal percorso ora superato (vedi sotto) |
+| `self_derived_sorting.py` | Sorting + curazione di qualità via `spikeinterface`/`lupin` — metodo **superato** dal pivot MEA-NAP del 2026-07-13, mantenuto solo per il confronto già calcolato su 001872 |
+| `io_brainwave.py` | Legge/converte file 3Brain `.brw` per il laboratorio; contiene anche `export_to_meanap_mat()`, il convertitore BRW→formato MEA-NAP |
+| `io_nwb_convert.py` | **Nuovo (2026-07-13)**: convertitore NWB→formato MEA-NAP (`nwb_to_meanap_mat`), equivalente NWB di `io_brainwave.py`'s `export_to_meanap_mat` |
+| `run_meanap_pipeline.py` | **Percorso attuale per Stage 2**: converte i raw NWB in scope, costruisce il CSV e l'oggetto `Params` che la pipeline MEA-NAP si aspetta, poi fa girare `meanap.pipeline.runner.run_pipeline()` (Step 1-4 completi) end-to-end — vedi §3.4 |
+| `features/spike_train.py`, `features/network.py` | **Superati come percorso primario** dal pivot a `run_pipeline()` (2026-07-13) — contengono comunque `detect_bursts_meanap_isin_batch`/wrapper diretti a MEA-NAP, mantenuti per compatibilità con `build_feature_matrix.py` (ora anch'esso secondario, vedi sotto) |
+| `features/spectral.py` | Feature spettrali: LFP, PSD, esponente aperiodico (FOOOF) — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
+| `features/complexity.py` | Feature di criticità: avalanche, entropia, complessità di Lempel-Ziv — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
+| `build_feature_matrix.py`, `build_feature_matrix_001872_meanap.py`, `build_feature_matrix_001872.py` | **Percorso superato** (2026-07-13): chiamavano le funzioni MEA-NAP una per una invece di far girare la pipeline completa. Output storico tenuto, non ricalcolato — vedi §3.4 |
+| `batch_effect.py`, `harmonize.py`, `reference.py` | Stage 3-5, non ancora implementati — leggeranno i CSV nativi di MEA-NAP direttamente (vedi §3.4), non un file Parquet consolidato |
 
 ---
 
@@ -97,7 +89,7 @@ non rompe gli altri.
 
 In questo progetto:
 - L'ambiente si chiama **`organoid-mea-foundation`** (Python 3.11)
-- È definito nel file `environment.yml` (la "ricetta": quali pacchetti,
+- È definito nel file `environment.yml` (quali pacchetti,
   quali versioni)
 - Va **attivato** prima di ogni comando: `conda activate organoid-mea-foundation`
   — da quel momento, `python`, `pip`, ecc. puntano tutti a questo ambiente
@@ -156,7 +148,7 @@ già testato e validato dalla comunità scientifica.
 
 ### 2.3 File che descrivono l'ambiente
 
-- `environment.yml` — la "ricetta" (cosa installare)
+- `environment.yml` — cosa installare
 - `outputs/reports/env_lock.txt` — le versioni *effettivamente risolte* la
   prima volta che l'ambiente è stato creato su questa macchina
 - `outputs/reports/pip_freeze.txt` — elenco completo e preciso di ogni
@@ -210,42 +202,118 @@ Ha testato 4 approcci diversi per "trovare gli spike" nei dati grezzi
 (soglia semplice, wavelet, sorter CPU non curato, sorter CPU curato),
 confrontandoli contro dati già analizzati e pubblicati. **Nessuno ha
 raggiunto il criterio di accettazione originale** (correlazione elettrodo-
-per-elettrodo) — motivo più probabile: i file grezzi e quelli con gli spike
-già ordinati non sono la stessa sessione di registrazione. La curazione di
-qualità ha però sistemato le statistiche aggregate. Decisione presa
-(2026-07-10): procedere comunque, usando gli spike già depositati dove
-esistono, e il sorting curato dove no — politica congelata in
-`config/params.yaml`.
+per-elettrodo) — spiegazione: i file grezzi e quelli con
+gli spike già ordinati non sono la stessa sessione di registrazione. Il gap temporale reale tra le due sessioni è stato
+misurato per tutti e 4 i soggetti (~57 min per HO1/HO4, ~4 giorni per
+HO2/HO3) e **l'ordine del gap coincide esattamente con l'ordine della
+correlazione ottenuta** (gap corto → rho più alto) — vedi l'addendum del
+2026-07-13 in `stage1_validation.md`. La curazione di qualità ha però
+sistemato le statistiche aggregate. Decisione presa il 2026-07-10:
+procedere comunque, usando gli spike già depositati dove esistono, e il
+sorting curato dove no.
+
+**Pivot successivo (2026-07-13):** proprio perché il gap temporale
+spiegava la mancata correlazione meglio della qualità del metodo, mescolare
+Units depositate (sessione diversa) e sorting self-derived (metodo diverso)
+tra dataset è stato giudicato un confound peggiore che usare un solo
+metodo, non perfetto ma uniforme, ovunque. Vedi §3.4 per la policy attuale.
 
 ### 3.4 Stage 2 — Estrazione feature (stage attuale)
 
-Questo è il cuore del progetto. Per **ogni registrazione**, calcola 4
-categorie di feature:
+Questo è il cuore del progetto. Ha attraversato **tre revisioni nella
+stessa giornata (2026-07-13)**, ciascuna motivata da quanto emerso dalla
+precedente — riassunte qui in ordine, perché capire il percorso aiuta a
+capire perché l'architettura finale è così.
+
+**Revisione 1 — un solo metodo di rilevamento spike, non due diversi.**
+All'inizio si usavano le Units già depositate per `001603` e sorting
+self-derived (`lupin`) per `001872` — due metodi diversi su due dataset
+diversi. Dato che l'addendum a Stage 1 (§3.3) aveva mostrato che le
+correlazioni fallite erano spiegate meglio dal gap temporale tra sessioni
+che dalla qualità del metodo, usare metodi di misura diversi tra dataset è
+stato giudicato un confound peggiore di un solo metodo imperfetto ma
+uniforme. Scelto il rilevatore a soglia di MEA-NAP ("thr4") su entrambi i
+dataset.
+
+**Revisione 2 — MEA-NAP calcola molto più di quanto stessimo usando.**
+Il codice iniziale chiamava singole funzioni di MEA-NAP una per una
+(`detect_spikes_full_recording`, `single_channel_burst_detection`,
+`firing_rates_bursts`, `adjm_thr`, un sottoinsieme di `network_metrics.py`).
+Verificato nel port Python completo
+(`external/MEA-NAP/python/PIPELINE_PORT_STATUS.md`) che MEA-NAP calcola,
+di suo, molto di più: modularità (Louvain), node cartography (6 ruoli
+hub/non-hub), participation coefficient, small-worldness, rich club — non
+solo il sottoinsieme deterministico base (grado, densità, clustering, path
+length, efficienza) che stavamo usando.
+
+**Revisione 3 — usare la pipeline `run_pipeline()` di MEA-NAP per intero,
+non le sue funzioni a pezzi.** MEA-NAP ha il proprio orchestratore completo
+(`meanap.pipeline.runner.run_pipeline()`, port di `MEApipeline.m`) che fa
+girare tutti e 4 gli step (detection → attività neuronale → connettività →
+metriche di rete) e scrive i propri file di output — CSV/JSON puliti, non
+serve riscrivere la logica di aggregazione. **Unico vincolo tecnico reale**:
+MEA-NAP non sa leggere NWB, solo file `.mat` (HDF5/v7.3) del formato usato
+da Axion/Multichannel Systems — serve una conversione preliminare.
 
 ```
-                    spike_times (da Units depositate O da sorting self-derived)
-                                    |
-        ┌───────────────┬──────────┼──────────┬───────────────┐
-        v               v          v           v               
-  spike_train.py   network.py  spectral.py  complexity.py
-  (per unità)       (grafo di   (serve il    (avalanche,
-                    connettività) dato grezzo) entropia)
-        |               |          |               |
-        └───────────────┴──────────┴───────────────┘
-                                |
-                                v
-              build_feature_matrix.py (001603) /
-              build_feature_matrix_001872.py (001872)
-                                |
-                                v
-              outputs/features/feature_matrix_*.parquet
+data/raw/*.nwb (grezzo)
+        |
+        v
+src/io_nwb_convert.py::nwb_to_meanap_mat()      (nuovo, 2026-07-13)
+        |
+        v
+data/meanap_mat/*.mat        (formato che MEA-NAP sa leggere)
+        |
+        v
+src/run_meanap_pipeline.py
+  - converte tutti i raw in scope (001603 HO1-4, tutto 001872)
+  - costruisce il CSV "spreadsheet" e l'oggetto Params che
+    meanap.pipeline.runner.run_pipeline() si aspetta,
+    usando i valori congelati in config/params.yaml
+        |
+        v
+meanap.pipeline.runner.run_pipeline()   (Step 1-4 completi di MEA-NAP)
+        |
+        v
+outputs/meanap_pipeline/OutputData/
+  2_NeuronalActivity/NeuronalActivity_RecordingLevel.csv
+  2_NeuronalActivity/NeuronalActivity_NodeLevel.csv
+  4_NetworkActivity/NetworkActivity_RecordingLevel.csv
+  4_NetworkActivity/NetworkActivity_NodeLevel.csv
+  (+ ephys_results.json, netmet_results.json, grafici di controllo)
 ```
 
-**Due percorsi diversi per i due dataset:**
-- `001603`: usa le Units **già depositate** (veloce, nessun calcolo pesante)
-- `001872`: nessuna Units depositata → deve fare **sorting da zero** (lento,
-  ore per file) tramite `self_derived_sorting.py`, poi le stesse 4 categorie
-  di feature
+**HO5-HO8 di 001603 restano fuori da questo flusso** — nessun file raw
+depositato su DANDI per questi 4 soggetti, MEA-NAP non può girare senza
+raw. Continuano a passare per `build_feature_matrix.py`'s
+`process_deposited_recording()` (percorso separato, Units depositate),
+producendo `spike_source: deposited` come eccezione forzata, non scelta.
+
+**`channel_layout` (coordinate elettrodi) non serve per risultati
+corretti** — verificato nel codice (`step4.py`): è usato solo per i grafici
+spaziali, dentro un blocco che salta silenziosamente il plot se il layout
+non è riconosciuto, senza toccare nessuna metrica numerica.
+
+**`fs` (frequenza di campionamento) è letta per-registrazione** dal file
+`.mat` stesso, non da un valore globale unico — permette di far girare
+`001603` (20kHz) e `001872` (10kHz) nella stessa chiamata a
+`run_pipeline()`.
+
+**Niente più matrice Parquet consolidata** (decisione 2026-07-13): dato che
+MEA-NAP scrive già CSV puliti e pronti, uno script di merge extra sarebbe
+solo un sovraccarico. Stage 3-5 leggerà questi CSV direttamente (con un
+pivot long→wide per le metriche di rete, che sono una riga per
+registrazione×lag, più il join con le righe HO5-8 da
+`build_feature_matrix.py`) quando verrà costruito — vedi §3.5.
+
+**Cosa succede ai risultati calcolati con gli approcci precedenti?** Non
+cancellati, tenuti come confronto storico su disco:
+`outputs/features/feature_matrix_001603_deposited_only.parquet` (tutta
+Units-depositate), `outputs/features/feature_matrix_001872.parquet`
+(self-derived sorting via `lupin`, fermato a metà), `outputs/features/
+feature_matrix_001603.parquet`/`feature_matrix_001872_meanap.parquet`
+(chiamate MEA-NAP a pezzi, Revisione 1-2). Nessuno di questi viene
+ricalcolato o usato come base per Stage 3-5.
 
 ### 3.5 Stage 3-5 (non ancora iniziati)
 
@@ -254,6 +322,15 @@ dall'età/maturazione dell'organoide (PCA, PERMANOVA, modelli misti).
 `harmonize.py` → corregge statisticamente l'effetto laboratorio (ComBat).
 `reference.py` → firma di riferimento corticale finale + mappa di
 maturazione (UMAP).
+
+**Input dati**: leggeranno direttamente i CSV nativi di MEA-NAP sotto
+`outputs/meanap_pipeline/OutputData/` (vedi §3.4) — non un Parquet
+consolidato. Compiti da gestire in quel momento, non prima: pivot
+long→wide di `NetworkActivity_RecordingLevel.csv` (una riga per
+registrazione×lag, serve una riga per registrazione), join con le righe
+HO5-8 (percorso `deposited` separato), ed eventualmente ISI mean/CV/skew/Lv
+e le feature spettrali/di complessità se si decide di includerle (nessun
+equivalente MEA-NAP per queste, andrebbero calcolate a parte).
 
 ### 3.6 Modulo separato: supporto al laboratorio (BrainWave5/3Brain)
 
@@ -304,21 +381,30 @@ python notebooks\run_sorter_curation.py
 Il flag `--subjects` accetta una lista separata da virgole. `--sorter`
 accetta `lupin`, `spykingcircus2`, o `tridesclous2`.
 
-### 4.3 Costruire la matrice di feature — Stage 2
+### 4.3 Estrazione feature — Stage 2 (percorso attuale)
 
 ```powershell
-# DANDI:001603 (veloce, usa Units depositate)
-python -m src.build_feature_matrix
+# HO1-4 di 001603 + tutte le registrazioni di 001872: converte i raw in
+# .mat e fa girare l'intera pipeline MEA-NAP (Step 1-4)
+python -m src.run_meanap_pipeline
 
-# DANDI:001872 (lento, richiede sorting — ore/giorni)
-python -m src.build_feature_matrix_001872
+# HO5-8 di 001603 (nessun raw disponibile, eccezione forzata su Units depositate)
+python -m src.build_feature_matrix
 ```
 
-**Entrambi sono riavviabili**: se interrotti (chiusura del terminale,
-sospensione del PC, errore), rilanciando lo stesso comando riprendono da
-dove si erano fermati, senza ricalcolare quanto già fatto. Il progresso è
-salvato in `outputs/features/_checkpoint_*.json` dopo ogni registrazione
-completata.
+Il primo comando è quello pesante (converte ogni file raw in `.mat`, poi
+fa girare detection + attività neuronale + connettività + metriche di rete
+su tutte le registrazioni in un'unica chiamata a `run_pipeline()`).
+Output sotto `outputs/meanap_pipeline/OutputData/` — vedi §3.4 per la
+struttura esatta.
+
+**Percorsi superati** (2026-07-13, mantenuti solo per confronto storico,
+non serve rilanciarli — i loro output esistenti restano validi così come
+sono):
+```powershell
+python -m src.build_feature_matrix_001872_meanap   # chiamate MEA-NAP a pezzi (Revisione 2)
+python -m src.build_feature_matrix_001872           # self-derived sorting lupin (Revisione 1)
+```
 
 ### 4.4 Elaborare un file del laboratorio (BrainWave5)
 ```powershell
@@ -343,15 +429,45 @@ su dati sintetici a statistiche note (non richiede dati scaricati).
 
 ```
 outputs/
-├── manifests/     → inventario dei dataset (CSV)
-├── features/      → LE MATRICI DI FEATURE FINALI (Parquet) + checkpoint (JSON)
-├── figures/       → grafici (attualmente vuota, verrà popolata negli Stage 3-5)
-└── reports/       → un file .md o .log per ogni fase importante, con
-                     conclusioni, tabelle di risultati, log grezzi di
-                     esecuzione
+├── manifests/         → inventario dei dataset (CSV)
+├── meanap_pipeline/    → OUTPUT PRINCIPALE DI STAGE 2 (percorso attuale, 2026-07-13+)
+│                         struttura nativa di MEA-NAP, vedi §5.2
+├── features/           → output storico (Parquet) dei percorsi superati
+│                         (chiamate MEA-NAP a pezzi, self-derived sorting,
+│                         Units depositate per HO5-8) + checkpoint (JSON)
+├── figures/            → grafici (attualmente vuota, verrà popolata negli Stage 3-5)
+└── reports/             → un file .md o .log per ogni fase importante, con
+                          conclusioni, tabelle di risultati, log grezzi di
+                          esecuzione
 ```
 
-### 5.2 Tabella completa: cosa genera ciascuno script
+### 5.2 Struttura di `outputs/meanap_pipeline/` (percorso attuale)
+
+```
+outputs/meanap_pipeline/
+├── recordings.csv                → lo "spreadsheet" che elenca ogni registrazione
+│                                   (filename, gruppo/soggetto, DIV/età)
+└── OutputData/
+    ├── ExperimentMatFiles/         → matrici di adiacenza STTC per lag (.npz)
+    ├── 1_SpikeDetection/
+    │   └── 1A_SpikeDetectedData/    → tempi degli spike per canale (.npz)
+    ├── 2_NeuronalActivity/
+    │   ├── ephys_results.json           → tasso di scarica + burst, tutto
+    │   ├── NeuronalActivity_RecordingLevel.csv   → 1 riga per registrazione
+    │   └── NeuronalActivity_NodeLevel.csv        → 1 riga per (registrazione, canale)
+    └── 4_NetworkActivity/
+        ├── netmet_results.json
+        ├── NetworkActivity_RecordingLevel.csv    → 1 riga per (registrazione, lag)
+        │     colonne: Dens, NDmean, nMod, Q, PL, Eglob, SW, SWw,
+        │     node cartography (NCpn1..6), participation coefficient, ecc.
+        └── NetworkActivity_NodeLevel.csv         → 1 riga per (registrazione, lag, canale)
+```
+
+Questi sono file nativi di MEA-NAP (stessa struttura del suo output MATLAB),
+letti direttamente con `pandas.read_csv` — non serve nessuna conversione
+per usarli in Stage 3-5 (vedi §3.4/§3.5).
+
+### 5.3 Tabella: cosa genera ciascuno script (per stage)
 
 | Script | Genera | Formato |
 |---|---|---|
@@ -360,40 +476,26 @@ outputs/
 | `notebooks/run_stage1_validation.py` | `stage1_validation_results*.json` | JSON |
 | `notebooks/run_sorter_validation.py` | `stage1_sorter_validation_results.json` | JSON |
 | `notebooks/run_sorter_curation.py` | `stage1_sorter_curated_validation_results.json`, `stage1_sorter_lupin_quality_metrics.csv` | JSON + CSV |
-| `src/build_feature_matrix.py` | **`feature_matrix_001603.parquet`** (14 righe × 78 colonne) | Parquet |
-| `src/build_feature_matrix_001872.py` | **`feature_matrix_001872.parquet`** (in costruzione, 15 righe attese) | Parquet |
-| `src/io_brainwave.py` (funzione `export_to_meanap_mat`) | File `.mat` per la GUI di MEA-NAP | HDF5/.mat |
+| `src/run_meanap_pipeline.py` **(Stage 2, percorso attuale)** | `outputs/meanap_pipeline/OutputData/` — vedi §5.2 | CSV + JSON |
+| `src/build_feature_matrix.py` (solo HO5-8) | Righe `deposited` unite manualmente a valle, non in un file separato | — |
+| `src/build_feature_matrix.py`, `_001872_meanap.py`, `_001872.py` (superati) | `feature_matrix_*.parquet` in `outputs/features/` — storico, non ricalcolato | Parquet |
+| `src/io_brainwave.py`/`io_nwb_convert.py` | File `.mat` per MEA-NAP (GUI o `run_meanap_pipeline.py`) | HDF5/.mat |
 | `notebooks/run_meanap_on_brainwave.py` | `summary.json`, `firing_rates_per_channel.csv`, `firing_rate_heatmap.png` | JSON + CSV + PNG |
 
-### 5.3 Cos'è un file `.parquet` e come si legge
-
-**Parquet** è un formato di file colonnare, compresso, molto più efficiente
-di un CSV per tabelle con molte colonne numeriche (il nostro caso: fino a 78
-colonne di feature). Si legge in Python con `pandas`:
+### 5.4 Come leggere i CSV di MEA-NAP
 
 ```python
 import pandas as pd
-df = pd.read_parquet("outputs/features/feature_matrix_001603.parquet")
-df.columns          # elenco di tutte le feature disponibili
-df.head()            # prime righe
-df.to_csv("export.csv")  # se serve un CSV per Excel/altri strumenti
+df = pd.read_csv("outputs/meanap_pipeline/OutputData/4_NetworkActivity/NetworkActivity_RecordingLevel.csv")
+df.columns          # elenco di tutte le metriche di rete disponibili
+df[df["Lag"] == "15mslag"]   # solo il lag 15ms (formato long: 1 riga per registrazione x lag)
 ```
 
-### 5.4 Anatomia di una riga della matrice di feature
-
-Ogni riga = **una registrazione**. Le colonne sono raggruppate per prefisso:
-
-| Prefisso colonna | Categoria | Esempio |
-|---|---|---|
-| (nessuno) | Metadati | `organoid_id`, `age`, `duration_s`, `spike_source` |
-| `spike_train__` | Per singola unità (aggregato: media + deviazione standard) | `spike_train__mfr_hz_mean` (tasso di scarica medio) |
-| `network__` | Rete/connettività | `network__mean_degree_15ms`, `network__density_15ms` |
-| `spectral__` | Spettrale (solo se esiste il dato grezzo) | `spectral__aperiodic_exponent_mean` |
-| `complexity__` | Criticità/complessità | `complexity__branching_ratio`, `complexity__sample_entropy` |
-
-Il campo **`spike_source`** dice se le feature vengono da spike già
-pubblicati (`deposited`) o calcolati da noi (`self_derived_lupin_curated`) —
-distinzione importante da non perdere mai nelle analisi successive.
+Il file `feature_matrix_*.parquet` in `outputs/features/` esiste ancora
+(output storico dei percorsi superati, spiegato in §3.4) e si legge allo
+stesso modo con `pd.read_parquet(...)`, ma **non è più l'output primario di
+Stage 2** — resta solo come confronto storico, non viene più prodotto o
+aggiornato.
 
 ### 5.5 File di log — a cosa servono
 
@@ -430,12 +532,22 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
 
 - ✅ **Stage 0-1**: completi. Ambiente, inventario dati, validazione pipeline
   (con esito negativo sul criterio originale, ma decisione umana di
-  procedere comunque con una politica congelata).
-- 🔄 **Stage 2**: `DANDI:001603` completo (14 registrazioni × 78 colonne di
-  feature). `DANDI:001872` **in corso** — richiede sorting self-derived su
-  15 file, stima iniziale ~30 ore di calcolo totale, in esecuzione in
-  background su più sessioni.
-- ⏳ **Stage 3-5**: non ancora iniziati.
+  procedere comunque; rafforzato e in parte reinterpretato dall'addendum e
+  dal pivot del 2026-07-13, vedi §3.3-3.4).
+- 🔄 **Stage 2**: architettura definitiva (terza revisione, 2026-07-13) —
+  `src/run_meanap_pipeline.py` converte i raw NWB e fa girare l'intera
+  pipeline `run_pipeline()` di MEA-NAP (Step 1-4) su HO1-4 (001603) e tutte
+  le 15 registrazioni di 001872. Testato end-to-end su un file piccolo
+  prima di lanciare su scala piena (disciplina già seguita per gli altri
+  passaggi pesanti di questo progetto). HO5-8 restano sul percorso
+  separato `deposited` (`build_feature_matrix.py`). I tre percorsi
+  precedenti (chiamate MEA-NAP a pezzi, self-derived sorting, Units
+  depositate ovunque) sono superati e tenuti solo come confronto storico.
+- ⏳ **Stage 3-5**: non ancora iniziati. Leggeranno i CSV nativi di
+  MEA-NAP sotto `outputs/meanap_pipeline/OutputData/` direttamente
+  (nessun Parquet consolidato, decisione 2026-07-13) — pivot long→wide
+  per le metriche di rete, join con le righe HO5-8, tutto da fare in
+  quella fase, non prima.
 - ⏳ **Modulo BrainWave5/3Brain**: infrastruttura pronta e testata (con un
   file di esempio pubblico), in attesa dei dati reali del laboratorio.
 
@@ -443,13 +555,33 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
 
 1. **MEA-NAP invece di codice scritto da zero** per rilevamento spike/burst/
    rete — già validato dalla comunità, non reinventare la ruota.
-2. **`lupin` come sorter CPU scelto** tra 3 opzioni testate (più veloce, più
-   unità trovate in un test di fattibilità).
-3. **Politica "spike source" per Stage 2**: Units depositate dove esistono,
-   sorting curato altrove — mai mischiare senza etichettare (`spike_source`).
-4. **`config/params.yaml` come unica fonte di verità** per ogni soglia/parametro
+2. **Usare la pipeline `run_pipeline()` completa di MEA-NAP, non le sue
+   funzioni una per una** (decisione finale, 2026-07-13, terza revisione
+   di Stage 2) — dà accesso a tutto il set di metriche di default di
+   MATLAB (modularità, node cartography, small-worldness, ecc.), non solo
+   al sottoinsieme che avremmo ricordato di richiamare a mano. Unico costo:
+   serve convertire NWB in `.mat` prima (`src/io_nwb_convert.py`), perché
+   MEA-NAP non sa leggere NWB nativamente.
+3. **`lupin` come sorter CPU** — usato solo nel percorso self-derived ora
+   superato (prima revisione di Stage 2), non nella policy attuale.
+4. **Politica "spike source" per Stage 2 (finale, 2026-07-13)**: un solo
+   metodo (MEA-NAP a soglia, via `run_pipeline()`) uniforme su entrambi i
+   dataset, per non introdurre "metodo di misura diverso" come confound
+   aggiuntivo rispetto a "laboratorio/piattaforma diverso" — obiettivo
+   centrale del progetto. Eccezione forzata (non scelta) solo per HO5-8,
+   che non hanno alcun raw depositato. Mai mischiare senza etichettare
+   (`spike_source`).
+5. **Niente Parquet consolidato per Stage 2** (2026-07-13) — MEA-NAP scrive
+   già CSV puliti; un merge/pivot extra è compito di Stage 3-5, non di
+   Stage 2, per evitare uno strato di trasformazione che nessuno usa finché
+   non serve davvero.
+6. **`config/params.yaml` come unica fonte di verità** per ogni soglia/parametro
    — il codice si rifiuta di girare se manca un valore, invece di usare un
-   default nascosto.
-5. **Ogni scelta di parametro non ovvia è documentata nel commento YAML
+   default nascosto. `run_meanap_pipeline.py::build_params()` traduce questi
+   valori nell'oggetto `Params` che MEA-NAP si aspetta, non li duplica.
+7. **Ogni scelta di parametro non ovvia è documentata nel commento YAML
    accanto**, con la fonte (letteratura scientifica citata, o convenzione di
    MEA-NAP) — nessun "numero magico" senza spiegazione.
+8. **Risultati superati non vengono cancellati**, solo affiancati da una
+   versione aggiornata con un nome file chiaro (es. `_deposited_only`,
+   `_meanap`) — permette confronti futuri senza dover ricalcolare da zero.

@@ -2,13 +2,9 @@
 
 **Status: acceptance criteria (rho>=0.8, burst %diff<=15%) NOT met by any of
 the four methods tried (threshold, wavelet, uncurated CPU sorter, curated
-CPU sorter), on any of the 4 human recorded subjects tested.** Per the
-handoff's explicit instruction ("If not met -> report the discrepancy and
-stop for review, do not silently tune"), this was reported and stopped for
-human review at each step rather than silently adjusted. **Decision (human,
-2026-07-10): accept this outcome and proceed to Stage 2** -- see "Closing
-decision" at the end of this report for what that means for Stage 2's
-methodology.
+CPU sorter), on any of the 4 human recorded subjects tested. Accept this 
+outcome and proceed to Stage 2** -- see "Closing decision" at the end of 
+this report for what that means for Stage 2's methodology.
 
 The third avenue (real CPU spike sorting via `spikeinterface`, expected to be
 the most promising since it produces genuinely separated units, not raw
@@ -157,17 +153,39 @@ positive). This is a real, informative split, not noise:
   random (p=0.93).
 
 **Most likely explanation**: the raw and deposited-Units files being
-compared are not the exact same recording session (see stage0_inventory.md
--- HO1's two files are ~1h17min apart on the same calendar day, tagged with
-the same nominal age but not confirmed to be temporally identical). If the
-specific set of active neurons genuinely differs somewhat between the two
-sessions (plausible for a live culture over ~1+ hour), *no* detection or
-sorting method could recover electrode-level correlation, no matter how
-good -- only aggregate population statistics would be expected to stay
-comparable, which is exactly the pattern observed. This can't be confirmed
-with the data currently available (no subject in 001603 has a raw file and
-a deposited-Units file from the literal same session) -- flagged as an
-open question, not resolved here.
+compared are not the exact same recording session (see `_RAW_FILE_FOR_UNITS`
+in `src/build_feature_matrix.py` for the exact age-matched pairing used).
+Checked precisely for all four subjects (raw file timestamp vs. paired
+deposited-Units file timestamp, from `outputs/manifests/manifest_001603.csv`):
+
+| Subject | Raw session | Units session | Gap |
+|---|---|---|---|
+| HO1 | 2025-09-24 01:19:00.52 | 2025-09-24 00:21:25.11 | **~57 min 35 s** |
+| HO4 | 2025-09-24 01:19:00.33 | 2025-09-24 00:21:26.47 | **~57 min 34 s** |
+| HO2 | 2025-09-12 14:48:39.45 | 2025-09-16 19:09:27.39 | **~4 days, 4h 21min** |
+| HO3 | 2025-09-12 15:08:17.54 | 2025-09-16 19:09:30.48 | **~4 days, 4h 1min** |
+
+(Earlier drafts of this report cited "~1h17min" for HO1 from a rougher
+estimate -- 57min35s is the precise figure from the actual paired files.)
+
+This is not just plausible but **quantitatively consistent with the
+observed rho pattern**: the two subjects with the short (~1h) gap have the
+two highest per-electrode correlations (HO4 rho=0.214, HO1 rho=0.163), and
+the two subjects with the long (~4-day) gap have the two lowest (HO2
+rho=0.091, HO3 rho=0.081) -- see the results table above. A live culture's
+active-neuron population plausibly drifts more over 4 days than over 1
+hour, and if the specific set of active neurons genuinely differs between
+the compared sessions, *no* detection or sorting method could recover
+electrode-level correlation, no matter how good -- only aggregate
+population statistics would be expected to stay comparable, which is
+exactly the pattern observed for all four subjects.
+
+With n=4 subjects this is an association, not a controlled proof (no
+subject in 001603 has a raw file and a deposited-Units file from the
+literal same session, so the gap-vs-rho relationship can't be tested
+within-subject) -- but it is now the best-supported explanation available,
+not merely a hypothesis of last resort. Flagged as strengthened evidence
+for the "Closing decision" below, not a fully resolved question.
 
 **Implication for whether to test more sorters**: `spykingcircus2` and
 `tridesclous2` do conceptually similar clustering + template matching to
@@ -270,6 +288,21 @@ declined -- they do conceptually similar clustering/template-matching to
 `lupin` and would likely reproduce the same pattern at a cost of several
 more hours each, per the same reasoning.
 
+**Addendum (2026-07-13):** precise raw/Units session-gap timestamps for all
+four subjects were checked (see "Most likely explanation" above) -- HO1 and
+HO4 have a ~57-minute gap, HO2 and HO3 have a ~4-day gap, and rho ranks
+exactly the same way (HO4 0.214 > HO1 0.163 > HO2 0.091 > HO3 0.081). This
+doesn't change the decision below, but meaningfully strengthens its
+rationale: the session-mismatch explanation is no longer just the most
+plausible account of a null result, it's quantitatively consistent with the
+one variable (session gap) most likely to drive genuine biological drift in
+a live culture.
+
+**SUPERSEDED 2026-07-13** -- see "Second addendum" at the end of this
+section. The bullet list immediately below is the ORIGINAL 2026-07-10
+decision, kept verbatim for the historical record; it is no longer the
+active Stage 2 policy.
+
 **Decision: proceed to Stage 2 accepting this outcome**, with the following
 consequences for Stage 2's methodology (to be applied consistently, not
 re-litigated per-recording):
@@ -300,3 +333,99 @@ re-litigated per-recording):
   full-length HO1-scale recording on this machine. Stage 2's scope (which
   001872 recordings get self-derived features, how many) should account for
   this rather than assuming it's cheap.
+
+## Second addendum (human decision, 2026-07-13) -- uniform MEA-NAP policy
+
+The 2026-07-13 addendum above (precise session-gap timestamps, gap-rho
+ordering) prompted a re-examination of the 2026-07-10 decision itself, not
+just its rationale: if the null per-electrode result is best explained by
+*which session* is being compared rather than *which method* detects
+spikes, then using a DIFFERENT detection method for 001603
+(deposited Units) than for 001872 (self-derived `lupin` sorting) adds a
+second, uncontrolled source of cross-dataset difference on top of the
+lab/platform difference this whole project exists to characterize --
+arguably worse for the project's actual goal than using one method that is
+imperfect but identical everywhere.
+
+**Revised decision: Stage 2 uses MEA-NAP threshold detection
+(`mea_nap_threshold`) as the uniform spike source for every recording with
+raw available**, superseding the "deposited where available, self-derived
+sorting elsewhere" split above:
+
+- `DANDI:001603` HO1-HO4 (raw available): MEA-NAP threshold, not deposited
+  Units.
+- `DANDI:001603` HO5-HO8 ("sourced" subjects, no raw deposited on DANDI at
+  all): **forced exception**, not a choice -- MEA-NAP cannot run without
+  raw. Kept as `spike_source: deposited`, explicitly flagged so these rows
+  can be excluded from Stage 3-5's primary analysis (human decision:
+  flag and keep, don't drop outright).
+- `DANDI:001872` (all 15 mirrored recordings): MEA-NAP threshold, not
+  self-derived `lupin` sorting.
+- The self-derived-sorting background job for 001872 was stopped
+  deliberately once this pivot was decided (was 2/15 recordings complete,
+  3 real bugs found and fixed along the way) -- its output no longer feeds
+  Stage 3-5, kept as `feature_matrix_001872.parquet` for comparison, not
+  deleted. Likewise `feature_matrix_001603_deposited_only.parquet`
+  preserves the pre-pivot all-deposited 001603 matrix.
+- Config: `config/params.yaml` `spike_detection.method` = `mea_nap_threshold`
+  (was `self_derived_lupin_curated`); see that file's comment block for the
+  full policy text.
+- `spike_source` values going forward: `mea_nap_threshold` (default),
+  `deposited` (HO5-8 only), `self_derived_lupin_curated` (comparison data
+  only, not primary).
+
+This does not reopen Stage 1's closure -- the four methods tested there
+remain the record of what was tried and why none met the original
+acceptance criteria. It changes what Stage 2 does with that finding.
+
+## Third addendum (human decision, 2026-07-13) -- MEA-NAP's own pipeline, not piecemeal calls
+
+Same day, pushed one step further: rather than calling individual MEA-NAP
+functions (`detect_spikes_full_recording`, `single_channel_burst_detection`,
+`firing_rates_bursts`, `adjm_thr`, a subset of `network_metrics.py`) from
+custom orchestrator scripts, Stage 2 now runs MEA-NAP's own full pipeline
+end-to-end (`meanap.pipeline.runner.run_pipeline()`, the Python port of
+`MEApipeline.m`, Steps 1-4). Motivation: the piecemeal approach only wired
+in the deterministic subset of MEA-NAP's network metrics (degree, density,
+clustering, path length, efficiency); MEA-NAP's own default pipeline
+computes substantially more (modularity/Louvain, node cartography,
+participation coefficient, small-worldness, rich club -- see
+`external/MEA-NAP/python/PIPELINE_PORT_STATUS.md`), all of which is now
+available with no extra integration work.
+
+Two supporting facts confirmed by reading the pipeline source before
+committing to this:
+- `channel_layout` (electrode coordinates) only affects spatial network
+  *plots* (`step4.py`, wrapped in a try/except that skips the plot on
+  failure) -- no computed metric depends on it, so no electrode-coordinate-
+  mapping problem needs solving for MaxWell/3Brain data to get correct
+  numeric results.
+- `fs` is read per-recording from each converted `.mat` file
+  (`load_raw_recording`), not from a single global `Params.fs` -- 001603
+  (20kHz) and 001872 (10kHz) run through one `run_pipeline()` call together.
+
+New modules: `src/io_nwb_convert.py` (`nwb_to_meanap_mat` -- MEA-NAP cannot
+read NWB directly, only Axion/Multichannel-Systems `.mat`, confirmed in
+`meanap.pipeline.io`'s own docstring, so this conversion is a hard
+requirement, not a stylistic choice) and `src/run_meanap_pipeline.py`
+(converts all in-scope raw recordings, builds the CSV spreadsheet and
+`Params` object `run_pipeline()` expects from `config/params.yaml`'s frozen
+values, calls `run_pipeline()`). `build_feature_matrix.py`,
+`build_feature_matrix_001872_meanap.py`, and `build_feature_matrix_001872.py`
+are all superseded as the primary Stage 2 path (their outputs kept for
+comparison, not deleted); `build_feature_matrix.py`'s
+`process_deposited_recording()` is still active for HO5-8's forced
+`deposited` exception, since those subjects never enter the MEA-NAP
+pipeline at all (no raw).
+
+**No consolidated feature-matrix Parquet going forward.** MEA-NAP's own
+pipeline already writes clean, ready-to-read CSVs
+(`NeuronalActivity_RecordingLevel.csv`/`NodeLevel.csv`,
+`NetworkActivity_RecordingLevel.csv`/`NodeLevel.csv` under
+`outputs/meanap_pipeline/OutputData/`). Decision: Stage 3-5 will read these
+directly rather than pre-building a merged Parquet -- the necessary
+transformations (pivoting `NetworkActivity_RecordingLevel.csv` from long,
+one row per recording x lag, to wide; joining HO5-8's `deposited` rows from
+the separate code path; optionally computing ISI mean/CV/skew/Lv and the
+spectral/complexity blocks, none of which have a MEA-NAP equivalent) belong
+in Stage 3-5's own design, not pre-built speculatively now.

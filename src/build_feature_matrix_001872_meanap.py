@@ -1,19 +1,23 @@
 """Stage 2 orchestrator for DANDI:001872 — MEA-NAP threshold spike source.
 
-2026-07-13 policy pivot (config/params.yaml `spike_detection`): MEA-NAP
-threshold detection is now the uniform default for every recording with raw
-available, so 001603 (HO1-HO4) and 001872 are measured the SAME way instead
-of mixing deposited Units / curated-sorter output across datasets. This
-module runs independently of, and in parallel with,
-build_feature_matrix_001872.py's self-derived-sorting (`lupin`) run --
-separate checkpoint and output files, so neither run interferes with the
-other. Both results are kept for comparison, not one replacing the other.
+SUPERSEDED as the primary Stage 2 path (2026-07-13, second pivot same day):
+see src/run_meanap_pipeline.py, which runs MEA-NAP's own run_pipeline()
+end-to-end (Steps 1-4, including modularity/node-cartography/small-
+worldness/etc. that this module's piecemeal features/network.py calls
+never wired in) instead of calling individual MEA-NAP functions. Kept for
+the comparison output already on disk (feature_matrix_001872_meanap.parquet
+where a run got that far), not re-run -- see outputs/reports/
+stage1_validation.md's "Third addendum" for the full reasoning.
 
-Much cheaper than the self-derived-sorting path: MEA-NAP threshold
-detection has no sorter-training step (see stage1_validation.md's
-feasibility table: ~51min for HO1 threshold vs. ~73min for curated `lupin`
-sorting on the same recording, and that gap widens further once curation's
-quality-metric computation is added).
+Original docstring, for the historical record: 2026-07-13 policy pivot
+(config/params.yaml `spike_detection`) made MEA-NAP threshold detection the
+uniform default for every recording with raw available, so 001603 (HO1-HO4)
+and 001872 are measured the SAME way instead of mixing deposited Units /
+curated-sorter output across datasets. This module ran independently of,
+and in parallel with, build_feature_matrix_001872.py's self-derived-sorting
+(`lupin`) run -- separate checkpoint and output files, so neither run
+interfered with the other. Both results were kept for comparison, not one
+replacing the other.
 """
 from __future__ import annotations
 
