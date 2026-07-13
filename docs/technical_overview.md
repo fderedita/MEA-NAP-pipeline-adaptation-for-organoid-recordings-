@@ -72,7 +72,8 @@ Lo stato attuale è documentato in dettaglio al §7.
 | `features/spike_train.py`, `features/network.py` | **Superati come percorso primario** dal pivot a `run_pipeline()` (2026-07-13) — contengono comunque `detect_bursts_meanap_isin_batch`/wrapper diretti a MEA-NAP, mantenuti per compatibilità con `build_feature_matrix.py` (ora anch'esso secondario, vedi sotto) |
 | `features/spectral.py` | Feature spettrali: LFP, PSD, esponente aperiodico (FOOOF) — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
 | `features/complexity.py` | Feature di criticità: avalanche, entropia, complessità di Lempel-Ziv — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
-| `build_feature_matrix.py`, `build_feature_matrix_001872_meanap.py`, `build_feature_matrix_001872.py` | **Percorso superato** (2026-07-13): chiamavano le funzioni MEA-NAP una per una invece di far girare la pipeline completa. Output storico tenuto, non ricalcolato — vedi §3.4 |
+| `build_feature_matrix.py` | **Attivo solo per HO5-8** (eccezione forzata, Units depositate); il resto del file (percorso MEA-NAP a pezzi) è superato, output storico tenuto — vedi §3.4 |
+| `build_feature_matrix_001872.py` | **Percorso superato** (self-derived sorting `lupin`); tenuto solo perché `io_nwb_convert.py` importa `_RAW_FILES`/`_parse_filename` da qui — output storico tenuto, non ricalcolato — vedi §3.4 |
 | `batch_effect.py`, `harmonize.py`, `reference.py` | Stage 3-5, non ancora implementati — leggeranno i CSV nativi di MEA-NAP direttamente (vedi §3.4), non un file Parquet consolidato |
 
 ---
@@ -413,13 +414,18 @@ su tutte le registrazioni in un'unica chiamata a `run_pipeline()`).
 Output sotto `outputs/meanap_pipeline/OutputData/` — vedi §3.4 per la
 struttura esatta.
 
-**Percorsi superati** (2026-07-13, mantenuti solo per confronto storico,
-non serve rilanciarli — i loro output esistenti restano validi così come
-sono):
+**Percorso superato** (2026-07-13, mantenuto solo per confronto storico,
+non serve rilanciarlo — l'output esistente resta valido così com'è; il
+file stesso resta in `src/` solo perché `io_nwb_convert.py` importa la
+lista dei raw file da lì, non perché vada eseguito):
 ```powershell
-python -m src.build_feature_matrix_001872_meanap   # chiamate MEA-NAP a pezzi (Revisione 2)
 python -m src.build_feature_matrix_001872           # self-derived sorting lupin (Revisione 1)
 ```
+(Il percorso "chiamate MEA-NAP a pezzi" — Revisione 2, che usava
+`build_feature_matrix_001872_meanap.py` — è stato rimosso dal repository
+il 2026-07-13: nessun file lo importava più, codice morto in senso
+stretto. Il suo output storico, se presente, resta comunque su disco in
+`outputs/features/`.)
 
 ### 4.4 Elaborare un file del laboratorio (BrainWave5)
 ```powershell

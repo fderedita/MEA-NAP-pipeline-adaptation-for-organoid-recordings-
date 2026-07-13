@@ -404,19 +404,26 @@ committing to this:
   (`load_raw_recording`), not from a single global `Params.fs` -- 001603
   (20kHz) and 001872 (10kHz) run through one `run_pipeline()` call together.
 
-New modules: `src/io_nwb_convert.py` (`nwb_to_meanap_mat` -- MEA-NAP cannot
-read NWB directly, only Axion/Multichannel-Systems `.mat`, confirmed in
-`meanap.pipeline.io`'s own docstring, so this conversion is a hard
-requirement, not a stylistic choice) and `src/run_meanap_pipeline.py`
-(converts all in-scope raw recordings, builds the CSV spreadsheet and
-`Params` object `run_pipeline()` expects from `config/params.yaml`'s frozen
-values, calls `run_pipeline()`). `build_feature_matrix.py`,
-`build_feature_matrix_001872_meanap.py`, and `build_feature_matrix_001872.py`
-are all superseded as the primary Stage 2 path (their outputs kept for
-comparison, not deleted); `build_feature_matrix.py`'s
+New modules (split into three, one per step of MEA-NAP's own required setup
+ritual, 2026-07-13): `src/io_nwb_convert.py` (`nwb_to_meanap_mat` +
+`convert_all_recordings` -- MEA-NAP cannot read NWB directly, only Axion/
+Multichannel-Systems `.mat`, confirmed in `meanap.pipeline.io`'s own
+docstring, so this conversion is a hard requirement, not a stylistic
+choice), `src/build_meanap_spreadsheet.py` (`build_spreadsheet` -- the CSV
+`run_pipeline()` requires), and `src/run_meanap_pipeline.py`
+(`build_params` translates `config/params.yaml`'s frozen values into the
+`Params` object `run_pipeline()` expects, `main()` calls `run_pipeline()`).
+`build_feature_matrix.py` and `build_feature_matrix_001872.py` are
+superseded as the primary Stage 2 path (their outputs kept for comparison,
+not deleted) but not removed from the repo: `build_feature_matrix.py`'s
 `process_deposited_recording()` is still active for HO5-8's forced
-`deposited` exception, since those subjects never enter the MEA-NAP
-pipeline at all (no raw).
+`deposited` exception (those subjects never enter the MEA-NAP pipeline at
+all, no raw), and `build_feature_matrix_001872.py`'s `_RAW_FILES`/
+`_parse_filename` are still imported by `io_nwb_convert.py` as the
+canonical 001872 file list. `build_feature_matrix_001872_meanap.py` (the
+piecemeal-MEA-NAP-calls path for 001872) had zero remaining imports from
+anywhere in the codebase and was deleted outright, not just marked
+superseded -- its output parquet, if produced, remains on disk.
 
 **No consolidated feature-matrix Parquet going forward.** MEA-NAP's own
 pipeline already writes clean, ready-to-read CSVs
