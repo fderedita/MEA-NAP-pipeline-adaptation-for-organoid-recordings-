@@ -30,22 +30,27 @@ from src.self_derived_sorting import run_curated_sorting
 DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
 
+# Ordered smallest-to-largest by (n_electrodes x duration_s), NOT DANDI/
+# filename order -- deliberately processes the 3 small, fast sample2 files
+# first so a pipeline bug surfaces in minutes, not after hours on a
+# 1020-channel/600s file. See outputs/manifests/manifest_001872.csv for the
+# per-file channel counts this ordering is based on.
 _RAW_FILES = [
-    "sub-sample-well000_ses-20260622T175109_ecephys.nwb",
-    "sub-sample-well000_ses-20260622T195034_ecephys.nwb",
-    "sub-sample-well000_ses-20260622T215252_ecephys.nwb",
-    "sub-sample-well000_ses-20260622T233922_ecephys.nwb",
-    "sub-sample-well008_ses-20260622T182607_ecephys.nwb",
-    "sub-sample-well008_ses-20260622T202514_ecephys.nwb",
-    "sub-sample-well008_ses-20260622T222259_ecephys.nwb",
-    "sub-sample-well008_ses-20260623T000326_ecephys.nwb",
-    "sub-sample-well016_ses-20260622T185903_ecephys.nwb",
-    "sub-sample-well016_ses-20260622T210111_ecephys.nwb",
-    "sub-sample-well016_ses-20260622T225444_ecephys.nwb",
-    "sub-sample-well016_ses-20260623T003647_ecephys.nwb",
-    "sub-sample2-well000_ses-20260623T155950_ecephys.nwb",
-    "sub-sample2-well008_ses-20260623T183144_ecephys.nwb",
-    "sub-sample2-well016_ses-20260623T183945_ecephys.nwb",
+    "sub-sample2-well016_ses-20260623T183945_ecephys.nwb",   # 130ch, 300s
+    "sub-sample2-well008_ses-20260623T183144_ecephys.nwb",   # 144ch, 300s
+    "sub-sample2-well000_ses-20260623T155950_ecephys.nwb",   # 251ch, 300s
+    "sub-sample-well000_ses-20260622T233922_ecephys.nwb",    # 369ch, 600s
+    "sub-sample-well016_ses-20260623T003647_ecephys.nwb",    # 402ch, 600s
+    "sub-sample-well016_ses-20260622T225444_ecephys.nwb",    # 452ch, 600s
+    "sub-sample-well000_ses-20260622T215252_ecephys.nwb",    # 530ch, 600s
+    "sub-sample-well008_ses-20260622T222259_ecephys.nwb",    # 592ch, 600s
+    "sub-sample-well008_ses-20260622T182607_ecephys.nwb",    # 619ch, 600s
+    "sub-sample-well016_ses-20260622T185903_ecephys.nwb",    # 644ch, 600s
+    "sub-sample-well008_ses-20260622T202514_ecephys.nwb",    # 697ch, 600s
+    "sub-sample-well016_ses-20260622T210111_ecephys.nwb",    # 731ch, 600s
+    "sub-sample-well008_ses-20260623T000326_ecephys.nwb",    # 808ch, 600s
+    "sub-sample-well000_ses-20260622T175109_ecephys.nwb",    # 1020ch, 600s
+    "sub-sample-well000_ses-20260622T195034_ecephys.nwb",    # 1020ch, 600s
 ]
 
 _NAME_RE = re.compile(r"sub-(sample2?)-(well\d+)_ses-(\d+T\d+)")
