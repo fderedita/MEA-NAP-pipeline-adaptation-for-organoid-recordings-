@@ -132,12 +132,21 @@ network:
     tail: 0.05                      # MEA-NAP's prob_thresh_tail default (one-sided upper-tail significance)
 
 spectral:
-  lfp_lowpass_hz: null              # TODO
+  # 300Hz lowpass -> 1000Hz downsample target leaves a healthy margin below
+  # the new Nyquist (500Hz), standard convention for organoid/cortical LFP
+  # (activity of interest is well under 100Hz; 300Hz cutoff avoids
+  # aliasing artifacts without over-attenuating the transition band).
+  lfp_lowpass_hz: 300
   lfp_target_fs_hz: 1000            # LFP downsample target, per handoff 4.3
   psd_method: welch
   fooof:
-    freq_range_hz: null             # TODO
-    aperiodic_mode: null            # TODO: {fixed, knee}
+    # [1,100]Hz is FOOOF's own commonly-cited example fitting range
+    # (Donoghue et al. 2020) -- avoids the 1/f-dominated near-0Hz region and
+    # stays well below our LFP Nyquist (500Hz). aperiodic_mode='fixed' is
+    # FOOOF's package default (no spectral "knee"); simpler starting choice,
+    # not fit-checked against our data for a knee.
+    freq_range_hz: [1, 100]
+    aperiodic_mode: fixed           # {fixed, knee}
 
 complexity:
   avalanche_bin_ms: null            # TODO
