@@ -45,13 +45,25 @@ def run_curated_sorting(raw_path: str, sorter_folder: str, config: dict) -> dict
     n_channels = recording.get_num_channels()
     electrode_coords = recording.get_channel_locations()
 
+    # lupin's default preprocessing band (freq_min=150, freq_max=7000Hz) was
+    # tuned for higher sampling rates (e.g. MaxOne's 20kHz, Nyquist 10kHz).
+    # 001872 (MaxTwo) is sampled at 10kHz (Nyquist 5kHz) -- 7000Hz exceeds
+    # Nyquist and scipy's filter design raises. Cap freq_max at 45% of fs
+    # (comfortable margin below Nyquist=50%) so the same code path works for
+    # any recording's actual sampling rate, not just the one this was first
+    # tested against (found the hard way: this is exactly the MaxOne-vs-
+    # MaxTwo settings mismatch flagged as a risk back in Stage 0's audit).
+    low, high = require(config, "preprocessing.bandpass_hz")
+    freq_max = min(high, fs * 0.45)
+
     sorter_folder_path = Path(sorter_folder)
     log_path = sorter_folder_path / "spikeinterface_log.json"
     if sorter_folder_path.exists() and log_path.exists():
         sorting = ss.read_sorter_folder(str(sorter_folder_path))
     else:
         sorting = ss.run_sorter(
-            sorter_name, recording, folder=str(sorter_folder_path), remove_existing_folder=True, verbose=False
+            sorter_name, recording, folder=str(sorter_folder_path), remove_existing_folder=True, verbose=False,
+            freq_min=float(low), freq_max=float(freq_max),
         )
 
     all_unit_ids = list(sorting.get_unit_ids())
