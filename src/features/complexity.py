@@ -24,7 +24,14 @@ def bin_population_activity(spike_times_dict: dict, duration_s: float, config: d
     if method != "mean_iei":
         raise ValueError(f"Unsupported complexity.avalanche_bin_method: {method!r}")
 
-    all_spikes = np.sort(np.concatenate([np.asarray(st) for st in spike_times_dict.values() if len(st) > 0]))
+    non_empty = [np.asarray(st) for st in spike_times_dict.values() if len(st) > 0]
+    if not non_empty:
+        # No units at all, or every unit had zero spikes (e.g. nothing survived
+        # curation for this recording) -- a real, expected scenario for
+        # low-activity 001872 recordings, not an error to crash on.
+        return np.array([]), np.nan
+
+    all_spikes = np.sort(np.concatenate(non_empty))
     if len(all_spikes) < 2:
         return np.array([]), np.nan
 
