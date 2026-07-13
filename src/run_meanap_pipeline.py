@@ -1,23 +1,24 @@
-"""Run MEA-NAP's own full pipeline (meanap.pipeline.runner.run_pipeline,
-Steps 1-4) end-to-end on DANDI:001603 (HO1-HO4) and DANDI:001872, instead of
-calling individual MEA-NAP functions piecemeal from build_feature_matrix*.py.
+"""Runs MEA-NAP's own pipeline (meanap.pipeline.runner.run_pipeline, the
+Python port of MEApipeline.m) end-to-end on DANDI:001603 (HO1-HO4) and
+DANDI:001872 -- Steps 1-4: spike detection, neuronal activity, functional
+connectivity, network metrics.
 
-2026-07-13 "unicamente MEA-NAP" decision: use MEA-NAP's own orchestrator so
-every network metric it computes by default (modularity/Louvain, node
-cartography, participation coefficient, small-worldness, rich club --
-see external/MEA-NAP/python/PIPELINE_PORT_STATUS.md) is available, not just
-the deterministic subset build_feature_matrix.py's network.py wires in.
-Controllability and NMF are computed too (step4.py doesn't gate them
-separately) but are NOT selected into our feature matrix by
-parse_meanap_pipeline_output.py, per that same decision (excluded from the
-"MEA-NAP default set" scope).
+This is the third piece of MEA-NAP's own required setup ritual (see its own
+README's "How to use the pipeline"): data converted to .mat
+(src/io_nwb_convert.py) + a batch-analysis spreadsheet
+(src/build_meanap_spreadsheet.py) + calling the pipeline itself, which is
+this file. build_params() only translates config/params.yaml's already-
+frozen values into the Params object run_pipeline() requires (the project's
+own "config-first, nothing hard-coded" guardrail) -- it computes nothing
+itself; every actual analysis step happens inside run_pipeline().
 
-Three stages, each independently re-runnable:
-1. convert_all_recordings() -- NWB -> MEA-NAP .mat (src/io_nwb_convert.py),
-   skipped if the .mat already exists.
-2. build_spreadsheet() -- the CSV read_recording_csv() expects.
-3. main() -- builds a Params object from config/params.yaml's frozen
-   values and calls run_pipeline().
+2026-07-13 "unicamente MEA-NAP" decision: this replaces the earlier
+piecemeal-MEA-NAP-function-calls architecture (build_feature_matrix*.py
+calling features/*.py) so every network metric MEA-NAP computes by default
+(modularity/Louvain, node cartography, participation coefficient,
+small-worldness, rich club -- see
+external/MEA-NAP/python/PIPELINE_PORT_STATUS.md) is available, not just the
+deterministic subset previously wired in.
 
 HO5-8 (001603 "sourced" subjects, no raw on DANDI) are NOT included here --
 MEA-NAP cannot run without raw. They keep spike_source=deposited as a
@@ -25,92 +26,13 @@ forced exception, handled separately in build_feature_matrix.py (unchanged).
 """
 from __future__ import annotations
 
-import csv
-import re
 from pathlib import Path
 
-from src.build_feature_matrix import _MEA_NAP_RAW_FILES, _units_metadata
-from src.build_feature_matrix_001872 import _RAW_FILES as _RAW_FILES_001872
+from src.build_meanap_spreadsheet import build_spreadsheet
 from src.config import load_config, require
-from src.io_nwb_convert import nwb_to_meanap_mat
+from src.io_nwb_convert import DATA_MEANAP_MAT, convert_all_recordings
 
-DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
-DATA_MEANAP_MAT = Path(__file__).resolve().parent.parent / "data" / "meanap_mat"
 OUTPUT_ROOT = Path(__file__).resolve().parent.parent / "outputs" / "meanap_pipeline"
-
-_AGE_RE = re.compile(r"P(\d+)M")
-
-
-def _div_from_age(age: str | None) -> float:
-    """Extract a numeric DIV-like proxy from an age tag like 'P7M' (7).
-    Not literal DIV (days in vitro) -- 001603's metadata gives postnatal
-    age tags, not culture DIV -- but numeric and monotonic, which is all
-    the spreadsheet's `DIV` column needs (a descriptive/grouping label
-    written into output CSVs, not consumed by any algorithm -- confirmed
-    via meanap.pipeline.step2.py/step4.py, which only read
-    filename/group/div positionally and pass div straight through to
-    output columns)."""
-    if not age:
-        return 0.0
-    m = _AGE_RE.search(age)
-    return float(m.group(1)) if m else 0.0
-
-
-def convert_all_recordings(config: dict) -> list[dict]:
-    """Convert every raw recording in scope (001603 HO1-HO4, all 001872) to
-    MEA-NAP .mat format, skipping ones already converted. Returns a list of
-    recording specs: filename (bare stem), group, div, dataset_id.
-    """
-    DATA_MEANAP_MAT.mkdir(parents=True, exist_ok=True)
-    recordings: list[dict] = []
-
-    for subject_id, filenames in _MEA_NAP_RAW_FILES.items():
-        for fname in filenames:
-            raw_path = DATA_RAW / fname
-            if not raw_path.exists():
-                continue
-            stem = Path(fname).stem
-            mat_path = DATA_MEANAP_MAT / f"{stem}.mat"
-            if not mat_path.exists():
-                print(f"  converting {fname} -> {mat_path.name} ...", flush=True)
-                nwb_to_meanap_mat(raw_path, mat_path)
-            meta = _units_metadata(str(raw_path))
-            recordings.append({
-                "filename": stem, "group": subject_id, "div": _div_from_age(meta.get("age")),
-                "dataset_id": "001603",
-            })
-
-    for fname in _RAW_FILES_001872:
-        raw_path = DATA_RAW / fname
-        if not raw_path.exists():
-            continue
-        stem = Path(fname).stem
-        mat_path = DATA_MEANAP_MAT / f"{stem}.mat"
-        if not mat_path.exists():
-            print(f"  converting {fname} -> {mat_path.name} ...", flush=True)
-            nwb_to_meanap_mat(raw_path, mat_path)
-        m = re.match(r"sub-(sample2?)-(well\d+)_ses-(\d+T\d+)", fname)
-        batch = m.group(1) if m else "unknown"
-        recordings.append({
-            # No DIV/age metadata exists for 001872 (self-derived dataset,
-            # verified in Stage 0's inventory -- flagged, not assumed).
-            "filename": stem, "group": f"001872_{batch}", "div": 0.0, "dataset_id": "001872",
-        })
-
-    return recordings
-
-
-def build_spreadsheet(recordings: list[dict], out_csv_path: Path) -> None:
-    """Write the CSV meanap.pipeline.spreadsheet.read_recording_csv() expects:
-    columns read positionally (Recording Filename, DIV group, Genotype,
-    [Ground]) -- header text isn't enforced by that function, but written
-    with MATLAB's own header names for readability."""
-    out_csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Recording Filename", "DIV group", "Genotype"])
-        for rec in recordings:
-            writer.writerow([rec["filename"], rec["div"], rec["group"]])
 
 
 def build_params(config: dict, output_folder: Path, spreadsheet_path: Path, spreadsheet_range: str):

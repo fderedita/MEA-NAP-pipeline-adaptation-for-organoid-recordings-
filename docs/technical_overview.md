@@ -66,8 +66,9 @@ Lo stato attuale è documentato in dettaglio al §7.
 | `validate_pipeline.py` | Confronta rilevamento spike "fatto da noi" contro le Units già depositate (Stage 1); contiene anche `detect_spikes_full_recording()`, usato da Stage 1 e dal percorso ora superato (vedi sotto) |
 | `self_derived_sorting.py` | Sorting + curazione di qualità via `spikeinterface`/`lupin` — metodo **superato** dal pivot MEA-NAP del 2026-07-13, mantenuto solo per il confronto già calcolato su 001872 |
 | `io_brainwave.py` | Legge/converte file 3Brain `.brw` per il laboratorio; contiene anche `export_to_meanap_mat()`, il convertitore BRW→formato MEA-NAP |
-| `io_nwb_convert.py` | **Nuovo (2026-07-13)**: convertitore NWB→formato MEA-NAP (`nwb_to_meanap_mat`), equivalente NWB di `io_brainwave.py`'s `export_to_meanap_mat` |
-| `run_meanap_pipeline.py` | **Percorso attuale per Stage 2**: converte i raw NWB in scope, costruisce il CSV e l'oggetto `Params` che la pipeline MEA-NAP si aspetta, poi fa girare `meanap.pipeline.runner.run_pipeline()` (Step 1-4 completi) end-to-end — vedi §3.4 |
+| `io_nwb_convert.py` | Convertitore NWB→formato MEA-NAP: `nwb_to_meanap_mat()` (un file) + `convert_all_recordings()` (tutti i raw in scope), equivalente NWB di `io_brainwave.py`'s `export_to_meanap_mat` |
+| `build_meanap_spreadsheet.py` | Scrive il CSV "spreadsheet" che MEA-NAP richiede per sapere quali registrazioni processare — lo stesso passaggio che ogni utente MEA-NAP prepara a mano, qui automatizzato |
+| `run_meanap_pipeline.py` | **Percorso attuale per Stage 2**: costruisce l'oggetto `Params` da `config/params.yaml` e fa girare `meanap.pipeline.runner.run_pipeline()` (Step 1-4 completi di MEA-NAP) — usa gli altri due moduli per la conversione e il CSV, non li reimplementa — vedi §3.4 |
 | `features/spike_train.py`, `features/network.py` | **Superati come percorso primario** dal pivot a `run_pipeline()` (2026-07-13) — contengono comunque `detect_bursts_meanap_isin_batch`/wrapper diretti a MEA-NAP, mantenuti per compatibilità con `build_feature_matrix.py` (ora anch'esso secondario, vedi sotto) |
 | `features/spectral.py` | Feature spettrali: LFP, PSD, esponente aperiodico (FOOOF) — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
 | `features/complexity.py` | Feature di criticità: avalanche, entropia, complessità di Lempel-Ziv — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
@@ -255,21 +256,35 @@ serve riscrivere la logica di aggregazione. **Unico vincolo tecnico reale**:
 MEA-NAP non sa leggere NWB, solo file `.mat` (HDF5/v7.3) del formato usato
 da Axion/Multichannel Systems — serve una conversione preliminare.
 
+Tre file separati, uno per ciascun passaggio del "rituale di setup" che
+MEA-NAP stesso richiede a qualunque utente (vedi il suo README: dati
+convertiti in `.mat` + un CSV "spreadsheet" preparato prima di poter
+lanciare l'analisi):
+
 ```
 data/raw/*.nwb (grezzo)
         |
         v
-src/io_nwb_convert.py::nwb_to_meanap_mat()      (nuovo, 2026-07-13)
+src/io_nwb_convert.py
+  - nwb_to_meanap_mat(): converte un file NWB in .mat
+  - convert_all_recordings(): lo fa per tutti i raw in scope
+    (001603 HO1-4, tutto 001872)
         |
         v
 data/meanap_mat/*.mat        (formato che MEA-NAP sa leggere)
         |
         v
+src/build_meanap_spreadsheet.py::build_spreadsheet()
+  - scrive il CSV che elenca ogni registrazione (nome file, gruppo, età)
+        |
+        v
+outputs/meanap_pipeline/recordings.csv
+        |
+        v
 src/run_meanap_pipeline.py
-  - converte tutti i raw in scope (001603 HO1-4, tutto 001872)
-  - costruisce il CSV "spreadsheet" e l'oggetto Params che
-    meanap.pipeline.runner.run_pipeline() si aspetta,
-    usando i valori congelati in config/params.yaml
+  - build_params(): traduce config/params.yaml nell'oggetto Params
+    che meanap.pipeline.runner.run_pipeline() si aspetta
+  - main(): chiama run_pipeline() -- questa riga è MEA-NAP, non nostra
         |
         v
 meanap.pipeline.runner.run_pipeline()   (Step 1-4 completi di MEA-NAP)

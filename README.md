@@ -40,9 +40,12 @@ src/io_dandi.py                DANDI asset discovery + streaming/download
 src/inventory.py               Stage 0 manifest builder
 src/validate_pipeline.py       Stage 1 pipeline validation vs ground truth
 src/io_nwb_convert.py          NWB -> MEA-NAP .mat converter (Stage 2, current path)
-src/run_meanap_pipeline.py     Stage 2 orchestrator, current path -- runs MEA-NAP's
-                                own run_pipeline() end-to-end (Steps 1-4) on every
-                                recording with raw available (see docs/technical_overview.md
+src/build_meanap_spreadsheet.py  writes the CSV "spreadsheet" MEA-NAP's own
+                                pipeline requires before it will run at all
+src/run_meanap_pipeline.py     Stage 2 orchestrator, current path -- builds a Params
+                                object from config/params.yaml and calls MEA-NAP's own
+                                run_pipeline() end-to-end (Steps 1-4) on every recording
+                                with raw available (see docs/technical_overview.md
                                 Sec 3.4 for the 2026-07-13 architecture history)
 src/build_feature_matrix.py    Stage 2, HO5-8 deposited-Units exception only
                                 (no raw on DANDI for those 4 subjects) + superseded
