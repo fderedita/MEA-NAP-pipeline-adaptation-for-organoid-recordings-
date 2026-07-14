@@ -12,13 +12,20 @@ frozen values into the Params object run_pipeline() requires (the project's
 own "config-first, nothing hard-coded" guardrail) -- it computes nothing
 itself; every actual analysis step happens inside run_pipeline().
 
-2026-07-13 "unicamente MEA-NAP" decision: this replaces the earlier
-piecemeal-MEA-NAP-function-calls architecture (build_feature_matrix*.py
-calling features/*.py) so every network metric MEA-NAP computes by default
-(modularity/Louvain, node cartography, participation coefficient,
-small-worldness, rich club -- see
-external/MEA-NAP/python/PIPELINE_PORT_STATUS.md) is available, not just the
-deterministic subset previously wired in.
+ONE RECORDING AT A TIME, NOT ALL 25 UPFRONT (2026-07-14 fix): the first
+full-scale attempt converted every recording to .mat before running
+anything, and filled the disk (~340GB needed, uncompressed float32 .mat
+files run 1.5-24.5GB each; this machine had ~106GB free after clearing the
+earlier partial attempt). MEA-NAP's own Step 2/4 CSV writers overwrite
+rather than append (`pd.DataFrame(rows).to_csv(...)`, confirmed in
+step2.py) -- calling run_pipeline() once per recording means each call's
+CSV only has that one recording's row, so this module harvests each
+recording's rows into its own accumulator CSVs
+(outputs/meanap_pipeline/merged/) right after each run_pipeline() call,
+before the next call overwrites MEA-NAP's own copy. The .mat is deleted
+immediately after harvesting, keeping peak disk usage to ~1 recording
+(worst case ~25GB) instead of the full dataset. Resumable: a recording
+already present in the accumulator's `FileName` column is skipped.
 
 HO5-8 (001603 "sourced" subjects, no raw on DANDI) are NOT included here --
 MEA-NAP cannot run without raw. They keep spike_source=deposited as a
@@ -28,11 +35,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from src.build_meanap_spreadsheet import build_spreadsheet
 from src.config import load_config, require
-from src.io_nwb_convert import DATA_MEANAP_MAT, convert_all_recordings
+from src.io_nwb_convert import DATA_MEANAP_MAT, list_all_recordings, nwb_to_meanap_mat
 
 OUTPUT_ROOT = Path(__file__).resolve().parent.parent / "outputs" / "meanap_pipeline"
+OUTPUT_DATA_FOLDER = OUTPUT_ROOT / "OutputData"
+MERGED_DIR = OUTPUT_ROOT / "merged"
+
+# (relative path under OUTPUT_DATA_FOLDER, merged filename)
+_CSV_SOURCES = [
+    ("2_NeuronalActivity/NeuronalActivity_RecordingLevel.csv", "NeuronalActivity_RecordingLevel.csv"),
+    ("2_NeuronalActivity/NeuronalActivity_NodeLevel.csv", "NeuronalActivity_NodeLevel.csv"),
+    ("4_NetworkActivity/NetworkActivity_RecordingLevel.csv", "NetworkActivity_RecordingLevel.csv"),
+    ("4_NetworkActivity/NetworkActivity_NodeLevel.csv", "NetworkActivity_NodeLevel.csv"),
+]
 
 
 def build_params(config: dict, output_folder: Path, spreadsheet_path: Path, spreadsheet_range: str):
@@ -82,24 +101,77 @@ def build_params(config: dict, output_folder: Path, spreadsheet_path: Path, spre
     )
 
 
+def _already_done(stem: str) -> bool:
+    """Resume check: has this recording's row already been harvested into
+    the merged NeuronalActivity_RecordingLevel.csv?"""
+    merged_path = MERGED_DIR / "NeuronalActivity_RecordingLevel.csv"
+    if not merged_path.exists():
+        return False
+    df = pd.read_csv(merged_path)
+    return "FileName" in df.columns and stem in set(df["FileName"])
+
+
+def _harvest_csvs(stem: str) -> None:
+    """Read the 4 CSVs MEA-NAP just wrote for this single recording (its
+    to_csv calls overwrite, so these only contain this recording's rows
+    right now) and append them into the merged accumulator CSVs."""
+    MERGED_DIR.mkdir(parents=True, exist_ok=True)
+    for rel_path, merged_name in _CSV_SOURCES:
+        src_path = OUTPUT_DATA_FOLDER / rel_path
+        if not src_path.exists():
+            continue
+        new_rows = pd.read_csv(src_path)
+        merged_path = MERGED_DIR / merged_name
+        if merged_path.exists():
+            existing = pd.read_csv(merged_path)
+            existing = existing[existing["FileName"] != stem]  # replace any partial/stale row for this recording
+            combined = pd.concat([existing, new_rows], ignore_index=True)
+        else:
+            combined = new_rows
+        combined.to_csv(merged_path, index=False)
+
+
+def process_one_recording(rec: dict, config: dict) -> None:
+    stem = rec["filename"]
+    if _already_done(stem):
+        print(f"=== {stem} === (skipping, already in merged output)", flush=True)
+        return
+
+    print(f"=== {stem} ===", flush=True)
+    mat_path = DATA_MEANAP_MAT / f"{stem}.mat"
+    DATA_MEANAP_MAT.mkdir(parents=True, exist_ok=True)
+    try:
+        print("  converting to MEA-NAP .mat format...", flush=True)
+        nwb_to_meanap_mat(rec["raw_path"], mat_path)
+
+        spreadsheet_path = OUTPUT_ROOT / f"_spreadsheet_{stem}.csv"
+        build_spreadsheet([rec], spreadsheet_path)
+
+        params = build_params(config, OUTPUT_DATA_FOLDER, spreadsheet_path, "2:2")
+
+        from meanap.pipeline.runner import run_pipeline
+        print("  running MEA-NAP pipeline (steps 1-4)...", flush=True)
+        run_pipeline(params, log=lambda msg: print(f"  {msg}", flush=True))
+
+        _harvest_csvs(stem)
+        spreadsheet_path.unlink(missing_ok=True)
+        print(f"  done, harvested into {MERGED_DIR}", flush=True)
+    finally:
+        # Always free the disk, even if this recording's run failed partway --
+        # the whole point of per-recording processing is bounded peak usage.
+        mat_path.unlink(missing_ok=True)
+
+
 def main():
     config = load_config()
-    print("Converting raw recordings to MEA-NAP .mat format...", flush=True)
-    recordings = convert_all_recordings(config)
-    print(f"{len(recordings)} recordings ready.", flush=True)
+    recordings = list_all_recordings(config)
+    print(f"{len(recordings)} recordings in scope (smallest to largest).", flush=True)
 
-    spreadsheet_path = OUTPUT_ROOT / "recordings.csv"
-    build_spreadsheet(recordings, spreadsheet_path)
-    print(f"Spreadsheet written: {spreadsheet_path}", flush=True)
+    for i, rec in enumerate(recordings, 1):
+        print(f"\n[{i}/{len(recordings)}]", flush=True)
+        process_one_recording(rec, config)
 
-    output_folder = OUTPUT_ROOT / "OutputData"
-    spreadsheet_range = f"2:{len(recordings) + 1}"
-    params = build_params(config, output_folder, spreadsheet_path, spreadsheet_range)
-
-    from meanap.pipeline.runner import run_pipeline
-    print("Running MEA-NAP pipeline (steps 1-4)...", flush=True)
-    result_path = run_pipeline(params, log=lambda msg: print(msg, flush=True))
-    print(f"\nDone. Output at: {result_path}", flush=True)
+    print(f"\nAll done. Merged CSVs at: {MERGED_DIR}", flush=True)
 
 
 if __name__ == "__main__":

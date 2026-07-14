@@ -84,15 +84,23 @@ def _div_from_age(age: str | None) -> float:
     return float(m.group(1)) if m else 0.0
 
 
-def convert_all_recordings(config: dict) -> list[dict]:
-    """Convert every raw recording in scope (001603 HO1-HO4, all 001872) to
-    MEA-NAP .mat format, skipping ones already converted. Returns a list of
-    recording specs: filename (bare stem), group, div, dataset_id.
+def list_all_recordings(config: dict) -> list[dict]:
+    """List every raw recording in scope (001603 HO1-HO4, all 001872) WITHOUT
+    converting -- returns specs with `raw_path` so a caller can convert one
+    at a time. (Converting all 25 recordings upfront was tried and blew the
+    disk: uncompressed float32 .mat files run ~1.5-24.5GB each depending on
+    channel count/duration, ~340GB total across all recordings, more than
+    this machine's free disk. Per-recording conversion + cleanup is
+    mandatory, not a style choice -- see run_meanap_pipeline.py.)
+
+    Ordered smallest-to-largest by (n_channels x duration_s), same
+    established "test small first" discipline as build_feature_matrix_001872.py's
+    _RAW_FILES -- also means more recordings complete before any future
+    disk-space problem is hit again, not fewer.
     """
     from src.build_feature_matrix import _MEA_NAP_RAW_FILES, _units_metadata
     from src.build_feature_matrix_001872 import _RAW_FILES as _RAW_FILES_001872
 
-    DATA_MEANAP_MAT.mkdir(parents=True, exist_ok=True)
     recordings: list[dict] = []
 
     for subject_id, filenames in _MEA_NAP_RAW_FILES.items():
@@ -101,14 +109,10 @@ def convert_all_recordings(config: dict) -> list[dict]:
             if not raw_path.exists():
                 continue
             stem = Path(fname).stem
-            mat_path = DATA_MEANAP_MAT / f"{stem}.mat"
-            if not mat_path.exists():
-                print(f"  converting {fname} -> {mat_path.name} ...", flush=True)
-                nwb_to_meanap_mat(raw_path, mat_path)
             meta = _units_metadata(str(raw_path))
             recordings.append({
                 "filename": stem, "group": subject_id, "div": _div_from_age(meta.get("age")),
-                "dataset_id": "001603",
+                "dataset_id": "001603", "raw_path": raw_path,
             })
 
     for fname in _RAW_FILES_001872:
@@ -116,16 +120,31 @@ def convert_all_recordings(config: dict) -> list[dict]:
         if not raw_path.exists():
             continue
         stem = Path(fname).stem
-        mat_path = DATA_MEANAP_MAT / f"{stem}.mat"
-        if not mat_path.exists():
-            print(f"  converting {fname} -> {mat_path.name} ...", flush=True)
-            nwb_to_meanap_mat(raw_path, mat_path)
         m = re.match(r"sub-(sample2?)-(well\d+)_ses-(\d+T\d+)", fname)
         batch = m.group(1) if m else "unknown"
         recordings.append({
             # No DIV/age metadata exists for 001872 (self-derived dataset,
             # verified in Stage 0's inventory -- flagged, not assumed).
             "filename": stem, "group": f"001872_{batch}", "div": 0.0, "dataset_id": "001872",
+            "raw_path": raw_path,
         })
 
+    # 001603's 10 files are all ~1020 channels/180s (roughly comparable
+    # size) except HO2/HO3's shorter age variants aren't meaningfully
+    # different in scale either -- the real size spread is in 001872
+    # (130ch/300s up to 1020ch/600s), so sort the whole combined list by a
+    # channel-count proxy read from each NWB's ElectricalSeries shape.
+    def _size_key(rec: dict) -> float:
+        from pynwb import NWBHDF5IO
+
+        io = NWBHDF5IO(str(rec["raw_path"]), mode="r")
+        try:
+            nwbfile = io.read()
+            ts = nwbfile.acquisition["ElectricalSeries"]
+            n_samples, n_channels = ts.data.shape
+            return n_samples * n_channels
+        finally:
+            io.close()
+
+    recordings.sort(key=_size_key)
     return recordings
