@@ -12,11 +12,10 @@ frozen values into the Params object run_pipeline() requires (the project's
 own "config-first, nothing hard-coded" guardrail) -- it computes nothing
 itself; every actual analysis step happens inside run_pipeline().
 
-ONE RECORDING AT A TIME, NOT ALL 25 UPFRONT (2026-07-14 fix): the first
-full-scale attempt converted every recording to .mat before running
-anything, and filled the disk (~340GB needed, uncompressed float32 .mat
-files run 1.5-24.5GB each; this machine had ~106GB free after clearing the
-earlier partial attempt). MEA-NAP's own Step 2/4 CSV writers overwrite
+ONE RECORDING AT A TIME, NOT ALL 25 UPFRONT: converting every recording to
+.mat before running anything needs ~340GB (uncompressed float32 .mat
+files run 1.5-24.5GB each) -- more disk than a typical dev machine has
+free. MEA-NAP's own Step 2/4 CSV writers overwrite
 rather than append (`pd.DataFrame(rows).to_csv(...)`, confirmed in
 step2.py) -- calling run_pipeline() once per recording means each call's
 CSV only has that one recording's row, so this module harvests each
@@ -33,6 +32,7 @@ forced exception, handled separately in build_feature_matrix.py (unchanged).
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 from pathlib import Path
 
 import pandas as pd
@@ -92,13 +92,20 @@ def build_params(config: dict, output_folder: Path, spreadsheet_path: Path, spre
         min_channel_network_burst=3,
         bakkum_network_burst_isi_n_threshold="automatic",
         # MATLAB's own default net_met_to_cal (Params' own default list) --
-        # "tutto il set di default di MATLAB" per the 2026-07-13 decision.
+        # use the full default metric set rather than a hand-picked subset.
         net_met_to_cal=["aN", "Dens", "NDmean", "NDtop25", "sigEdgesMean", "NSmean",
                          "ElocMean", "CC", "nMod", "Q", "PL", "Eglob", "SW", "SWw"],
         start_analysis_step=1,
         stop_analysis_step=4,
         time_processes=True,
     )
+
+
+# Recordings to exclude while a Step 4 stall on them is under investigation.
+# Deliberately NOT marked done in the merged CSV (this skip is invisible to
+# _already_done, so the gap stays visible) -- remove the entry once
+# investigated and fixed, with a root-cause note here for the record.
+_TEMP_SKIP: set[str] = set()
 
 
 def _already_done(stem: str) -> bool:
@@ -133,6 +140,9 @@ def _harvest_csvs(stem: str) -> None:
 
 def process_one_recording(rec: dict, config: dict) -> None:
     stem = rec["filename"]
+    if stem in _TEMP_SKIP:
+        print(f"=== {stem} === (TEMPORARILY SKIPPED -- see _TEMP_SKIP, needs investigation)", flush=True)
+        return
     if _already_done(stem):
         print(f"=== {stem} === (skipping, already in merged output)", flush=True)
         return
@@ -161,15 +171,55 @@ def process_one_recording(rec: dict, config: dict) -> None:
         # the whole point of per-recording processing is bounded peak usage.
         mat_path.unlink(missing_ok=True)
 
+        # Step 4 alone makes 10+ separate joblib.Parallel() calls per
+        # recording (NMF's two batched searches, participation_coef_norm per
+        # lag) via joblib's cached/reused loky executor, which can leave
+        # worker-pool resources (semaphores, temp folders) not fully
+        # released between calls. Force a clean executor teardown after
+        # every recording (not just on success) so any such leak can't
+        # accumulate across a 25-recording run; the ~1s respawn cost next
+        # recording is negligible next to
+        # multi-hour Step 4 runtimes.
+        try:
+            from joblib.externals.loky import get_reusable_executor
+            get_reusable_executor().shutdown(wait=True)
+        except Exception as e:
+            print(f"  Warning: could not shut down joblib executor: {e}", flush=True)
+
 
 def main():
     config = load_config()
     recordings = list_all_recordings(config)
     print(f"{len(recordings)} recordings in scope (smallest to largest).", flush=True)
 
+    # Each recording runs in its own child process rather than inline in
+    # this long-running one. Large per-recording allocations (the raw
+    # voltage trace, joblib worker pools) were observed to not be fully
+    # released back to the OS even after their Python references went out
+    # of scope -- confirmed via dmesg: a later recording's OOM-kill RSS
+    # matched the sum of an earlier recording's residual footprint plus
+    # its own new allocation, i.e. memory was accumulating *across*
+    # recordings inside one process, not within a single recording's own
+    # processing. Isolating each recording in its own process guarantees
+    # the OS reclaims everything on exit, and also contains a crash
+    # (including an OOM kill, which gives Python no chance to log
+    # anything) to that one recording instead of taking down the whole
+    # run -- the next recording still gets a fresh attempt, and a killed
+    # recording is simply not yet in the merged CSV for the usual resume
+    # logic to pick up later.
+    ctx = mp.get_context("fork")
     for i, rec in enumerate(recordings, 1):
         print(f"\n[{i}/{len(recordings)}]", flush=True)
-        process_one_recording(rec, config)
+        p = ctx.Process(target=process_one_recording, args=(rec, config))
+        p.start()
+        p.join()
+        if p.exitcode != 0:
+            reason = (
+                f"terminated by signal {-p.exitcode}"
+                if p.exitcode is not None and p.exitcode < 0
+                else f"exit code {p.exitcode}"
+            )
+            print(f"  FAILED ({reason}) -- continuing with next recording", flush=True)
 
     print(f"\nAll done. Merged CSVs at: {MERGED_DIR}", flush=True)
 

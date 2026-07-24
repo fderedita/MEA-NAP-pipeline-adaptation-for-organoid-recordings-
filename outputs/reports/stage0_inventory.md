@@ -3,11 +3,7 @@
 - DANDI:001603 assets scanned: 111
 - DANDI:001872 assets scanned: 120
 
-## Errors encountered while streaming metadata
-
-None.
-
-## ⚠️ DANDI:001603 contains non-human subjects — must be excluded
+## DANDI:001603 contains non-human subjects — must be excluded
 
 This dataset is titled "Preconfigured neuronal firing sequences in human brain organoids" but its subject list is NOT all-human. Species breakdown by subject_id count: {'Homo sapiens': 8, 'Mus musculus': 24, 'Rattus norvegicus': 4}.
 
@@ -138,7 +134,7 @@ Only subjects with `species == Homo sapiens` (prefix `HO*`, 8 subjects) are in s
 - VERIFIED: species per subject, read directly from NWB Subject metadata — confirms 001603 mixes Homo sapiens subjects with Mus musculus / Rattus norvegicus reference subjects; 001872 subjects are all Homo sapiens.
 - NOT YET VERIFIED: whether the 4 `PR1-4` (rat) / `PR5-8` (mouse) subjects that have neither raw nor Units data are empty/placeholder NWB files or contain some other data type (e.g. stimulus/protocol only) not captured by this manifest's columns — not investigated further since these are non-human and out of scope regardless.
 
-## Open questions for human review
+## Open questions
 
 - **Exclude non-human subjects going forward**: confirm it's fine to drop all `M1S*/M2S*/M3S*`, `MO*`, `PR*` subjects from 001603 for the rest of this project (28 of 36 subjects) — only `HO1-HO8` are human.
 - Confirm the well -> organoid mapping for 001872: does each well_id correspond to one biological organoid across all its sessions, or could a well have been re-seeded between sessions (which would break the organoid-as-grouping-unit guardrail)? Note the `sample` batch has multiple sessions per well spanning different ages while `sample2` has one session per well — worth confirming these are genuinely longitudinal recordings of the same organoid within `sample`, not re-seeds.

@@ -1,8 +1,7 @@
 """Stage 1 — pipeline validation against deposited ground truth (001603).
 
 Spike detection track: MEA-NAP's Python port (threshold method), replacing
-the originally-planned custom "pragmatic" CPU threshold track per the
-2026-07-09 decision (see conversation log / commit history) -- MEA-NAP's
+the originally-planned custom "pragmatic" CPU threshold track -- MEA-NAP's
 detection + burst analysis, cross-checked against MATLAB, is used directly
 rather than reimplementing the same thing from scratch.
 

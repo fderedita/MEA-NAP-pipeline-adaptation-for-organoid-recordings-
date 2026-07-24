@@ -19,13 +19,17 @@ from src import io_dandi
 
 DATA_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 
-# 001603: human recorded subjects (HO1-HO4) only. HO1 already mirrored by
-# hand earlier (raw + curated units). For HO2/HO3, one raw + one Units
-# asset per distinct `age` tag observed (P6M/P7M/P8M/P8MT4H) -- note this
-# tag does NOT appear to track literal chronological recording time (see
-# stage0_inventory.md open questions), so treat it as a diversity/coverage
-# heuristic, not verified DIV.
+# 001603: human recorded subjects (HO1-HO4) only. For HO2/HO3, one raw +
+# one Units asset per distinct `age` tag observed (P6M/P7M/P8M/P8MT4H) --
+# note this tag does NOT appear to track literal chronological recording
+# time (see stage0_inventory.md open questions), so treat it as a
+# diversity/coverage heuristic, not verified DIV.
 ASSETS_001603 = [
+    # HO1 (single session; originally mirrored by hand on the dev machine
+    # before this script existed, so this list never included it, leaving
+    # fresh environments -- e.g. a new workstation -- without HO1's raw file)
+    "sub-HO1/sub-HO1_ses-20250924T011900_ecephys.nwb",  # raw
+    "sub-HO1/sub-HO1_ses-20250924T002125.nwb",  # units
     # HO2
     "sub-HO2/sub-HO2_ses-20250912T144835_obj-9jlzq1_ecephys.nwb",  # raw, age=P6M
     "sub-HO2/sub-HO2_ses-20250916T190936.nwb",  # units, age=P6M

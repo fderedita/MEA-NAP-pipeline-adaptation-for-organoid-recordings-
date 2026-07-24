@@ -5,9 +5,9 @@ rate scalar).
 
 Mirrors io_brainwave.py's export_to_meanap_mat (same target format, same
 on-disk transpose convention), for DANDI:001603/001872's NWB files instead
-of the lab's 3Brain .brw files. Built as part of the 2026-07-13 "unicamente
-MEA-NAP" pivot (see config/params.yaml `spike_detection`): running MEA-NAP's
-own run_pipeline() end-to-end on DANDI data requires converting NWB to this
+of the lab's 3Brain .brw files. Required by the uniform-MEA-NAP spike-source
+policy (see config/params.yaml `spike_detection`): running MEA-NAP's own
+run_pipeline() end-to-end on DANDI data requires converting NWB to this
 format first, since MEA-NAP's own I/O layer only reads Axion/Multichannel-
 Systems .mat files (verified in meanap.pipeline.io's docstring), not NWB.
 

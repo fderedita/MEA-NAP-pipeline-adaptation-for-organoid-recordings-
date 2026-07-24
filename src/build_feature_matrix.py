@@ -1,7 +1,7 @@
 """Stage 2 orchestrator — assembles outputs/features/feature_matrix.parquet.
 
-SUPERSEDED as the primary Stage 2 path (2026-07-13, second pivot same day):
-see src/run_meanap_pipeline.py, which runs MEA-NAP's own run_pipeline()
+SUPERSEDED as the primary Stage 2 path: see src/run_meanap_pipeline.py,
+which runs MEA-NAP's own run_pipeline()
 end-to-end instead of calling features/*.py piecemeal. This module is now
 used ONLY for HO5-HO8's forced `deposited` exception (001603 "sourced"
 subjects with no raw on DANDI at all -- MEA-NAP cannot run without raw) --
@@ -56,7 +56,7 @@ FEATURES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "features"
 # "recorded" human subjects (HO1-HO4) -- NOT the same recording session
 # (matched only by nominal `age` tag; confirmed gap is ~57min for HO1/HO4
 # vs ~4 days for HO2/HO3, which tracks their firing-rate Spearman rho --
-# see stage1_validation.md, "Most likely explanation" / 2026-07-13 addendum).
+# see stage1_validation.md, "Most likely explanation" addendum).
 # HO5-8 ("sourced" subjects) have no raw at all -- absent from this dict.
 _RAW_FILE_FOR_UNITS = {
     "sub-HO1_ses-20250924T002125.nwb": "sub-HO1_ses-20250924T011900_ecephys.nwb",
@@ -73,7 +73,7 @@ _RAW_FILE_FOR_UNITS = {
 
 # HO1-HO4's raw files, grouped by subject (derived from _RAW_FILE_FOR_UNITS'
 # values, one source of truth) -- these are the recordings MEA-NAP threshold
-# detection runs on directly, per the 2026-07-13 policy pivot.
+# detection runs on directly, per the uniform-spike-source policy.
 _MEA_NAP_RAW_FILES: dict[str, list[str]] = {}
 for _raw_fname in _RAW_FILE_FOR_UNITS.values():
     _subject_id = _raw_fname.split("_")[0].replace("sub-", "")
@@ -158,8 +158,8 @@ _HO_UNITS_FILES = {
 
 
 def discover_001603_recordings() -> list[dict]:
-    """List recording specs for 001603's human subjects, per the 2026-07-13
-    policy: HO1-HO4 (raw available) get a `raw_path` spec (MEA-NAP
+    """List recording specs for 001603's human subjects, per the uniform
+    spike-source policy: HO1-HO4 (raw available) get a `raw_path` spec (MEA-NAP
     threshold detection); HO5-HO8 (no raw on DANDI) keep a `units_path`
     spec (deposited Units, forced exception)."""
     recordings = []
@@ -225,9 +225,8 @@ def process_deposited_recording(subject_id: str, units_path: str, config: dict) 
 
 def process_meanap_recording(subject_id: str, raw_path: str, config: dict) -> dict:
     """One feature-matrix row using MEA-NAP threshold detection directly on
-    the raw ElectricalSeries -- the 2026-07-13 default for any recording
-    with raw available (HO1-HO4 here; all of 001872 in
-    build_feature_matrix_001872_meanap.py). MUA-level, not SUA: spike_times
+    the raw ElectricalSeries -- the default for any recording with raw
+    available (HO1-HO4 here). MUA-level, not SUA: spike_times
     are per-channel, not per-curated-unit."""
     meta = _units_metadata(raw_path)
     detected = detect_spikes_full_recording(raw_path, config)

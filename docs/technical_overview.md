@@ -148,6 +148,113 @@ rilevamento spike, statistiche di burst, connettività STTC, metriche di
 grafo — **riusato direttamente invece di essere riscritto da zero**, perché
 già testato e validato dalla comunità scientifica.
 
+### 2.2.1 Setup di MEA-NAP da zero (necessario dopo un clone nuovo)
+
+`external/` è **completamente escluso da git** — chi clona questo repo NON
+riceve MEA-NAP insieme al resto. Passi per ricostruirlo (fatti a mano su
+questa macchina, da rifare identici altrove):
+
+```powershell
+git clone https://github.com/SAND-Lab/MEA-NAP.git "external\MEA-NAP"
+conda activate organoid-mea-foundation
+pip install -e "external\MEA-NAP"
+```
+
+**Patch locale necessaria, non presente upstream** (2026-07-14): il repo
+ufficiale ha un bug in `src/meanap/pipeline/step2.py` — il calcolo di
+`duration_s` (letto dalla shape del file `.mat` grezzo) usa un controllo
+hardcoded `if n_samples == 64` per capire se l'array è trasposto, invece del
+controllo robusto `if n_samples == n_channels` già usato correttamente in
+`step3.py`/`step4.py`. Per qualunque registrazione con un numero di canali
+diverso da 64 (il nostro caso: 130-1020 canali, mai 64), la correzione non
+scatta mai e `duration_s` viene calcolato come `n_channels / fs` invece di
+`n_samples / fs` — un valore migliaia di volte troppo piccolo, che gonfia
+tutte le statistiche dipendenti dalla durata nel CSV `NeuronalActivity_*`
+(FRmean, NBurstRate, ecc.) di un fattore enorme. **Non influenza** Step 3
+(connettività STTC) né la maggior parte di Step 4 (metriche di rete
+topologiche), che usano già il controllo corretto.
+
+Fix applicato manualmente in questo clone locale (`external/MEA-NAP/src/
+meanap/pipeline/step2.py`, riga ~136): sostituire `if n_samples == 64:` con
+`if n_samples == n_channels:`. **Va riapplicato a mano dopo ogni clone
+nuovo** di MEA-NAP, dato che `external/` non è tracciato da git — non c'è
+modo di farlo ereditare automaticamente. Scoperto verificando manualmente i
+numeri nel CSV di output (FRmean ~24000 Hz, biologicamente impossibile) e
+rintracciando la causa nel codice sorgente, non assunto.
+
+### 2.2.2 Patch di performance/correttezza aggiuntive (2026-07-20/22)
+
+Come per `step2.py` sopra, **tutte queste patch vivono solo nel clone locale
+di `external/MEA-NAP`** (gitignored) e vanno riapplicate a mano dopo ogni
+clone nuovo, su ogni macchina (workstation e locale sono state tenute
+allineate a mano, non c'è un meccanismo automatico). Nate processando
+HO1-4/001872 su HD-MEA a 130-1020 canali — scala mai raggiunta prima nel
+ciclo di sviluppo/test di MEA-NAP, che assume tipicamente MEA standard a
+~60 elettrodi. Tutte verificate su dati reali (non solo sintetici) prima
+del deploy.
+
+1. **`network_metrics.py::participation_coef_norm`** — le 100 randomizzazioni
+   per normalizzare il participation coefficient erano seriali; il costo
+   scala con n² tramite `null_model_und_sign`, dominando lo Step 4 (ore per
+   lag) su registrazioni a 1000+ canali. Ora girano in parallelo via
+   `joblib.Parallel` (processi worker separati, non thread — ogni
+   iterazione è indipendente, nessun rischio di correttezza).
+2. **`nmf.py::cal_nmf`** — due bug distinti nella ricerca del numero di
+   componenti NMF: (a) il ciclo di sweep per la varianza spiegata al 95%
+   mancava l'uscita anticipata nonostante il `break` fosse l'intento
+   dichiarato nel codice; (b) anche corretto, il punto di arresto può
+   richiedere centinaia di fit NMF seriali a rango crescente. Entrambi i
+   cicli ora calcolano un blocco di ranghi candidati in parallelo e
+   scorrono i risultati in ordine per trovare lo stesso identico punto di
+   arresto che troverebbe una ricerca seriale (verificato: corrispondenza
+   esatta con un riferimento seriale su dati di controllo).
+3. **`network_metrics.py::effective_rank`** — costruiva una matrice densa
+   di spike a piena frequenza di campionamento (`n_samples × n_channels`)
+   prima di ridurla; per 1014 canali × 600s × 10kHz, ~49 GB — più della RAM
+   disponibile. Ora costruita e ridotta a blocchi di canali (~512MB l'uno);
+   risultato numericamente identico (`resample_poly` filtra ogni canale
+   indipendentemente, quindi processarli a blocchi non cambia nulla).
+4. **`probabilistic_threshold.py::adjm_thr`** (Step 3) — le 200 ripetizioni
+   surrogate per la soglia di significatività erano seriali, ciascuna
+   ricalcolando l'intera matrice STTC O(n²). Parallelizzate con lo stesso
+   schema del punto 1.
+5. **`plotting_step2.py::plot_burst_detection_info`** — due cicli Python
+   annidati O(spike totali × burst totali) per verificare se uno spike
+   cade dentro un burst di rete. Sostituiti con una ricerca vettorializzata
+   (`np.searchsorted`), sfruttando che i burst di rete non si sovrappongono
+   per costruzione — fino a 1236× più veloce, risultato identico.
+6. **`network_metrics.py`: `NULL_MODEL_DENSITY_LIMIT = 0.5`** — la scoperta
+   più importante: su registrazioni con connettività STTC molto densa
+   (osservato: 97.3% su HO2 — segnale biologico reale di sincronizzazione
+   diffusa, non un bug di soglia; verificato che `tail=0.05` è il default
+   standard di MEA-NAP), la randomizzazione a preservazione di grado usata
+   sia per `participation_coef_norm` sia per la small-worldness
+   (`latmio_und_v2`/`randmio_und_v2` in `step4.py`) diventa
+   algoritmicamente impraticabile: il campionamento per rigetto cerca
+   quartetti di nodi con un arco presente e uno assente, evento
+   sempre più raro quanto più il grafo è denso. Separatamente,
+   `step4.py::compute_network_metrics`'s local efficiency
+   (`efficiency_wei_local`) richiama un intero calcolo di cammini minimi
+   *per ogni nodo*, un'esplosione O(n²) equivalente alla stessa densità.
+   Sopra questa soglia (conservativa, non un confine misurato con
+   precisione), queste tre metriche vengono saltate e segnalate
+   esplicitamente nei dati (`PCNormalized`,
+   `SmallWorldnessSkippedHighDensity`, `ElocSkippedHighDensity`) invece di
+   bloccarsi in silenzio — il gap resta visibile, non nascosto.
+7. **`step3.py`/`step4.py`** — l'eccezione generica attorno alla lettura del
+   file raw per calcolare la durata veniva inghiottita senza dettagli
+   (`except Exception: log("could not read raw file...")`); ora include il
+   messaggio d'errore reale e se il percorso esiste, per non restare senza
+   indizi se ricapita.
+8. **`src/run_meanap_pipeline.py`** (file nostro, tracciato da git — non
+   serve riapplicare a mano) — chiusura esplicita del pool di processi di
+   `joblib` dopo ogni registrazione (`get_reusable_executor().shutdown()`),
+   dato che una singola registrazione può fare 10+ chiamate separate a
+   `joblib.Parallel()` nello Step 4; sospettato (non confermato con
+   certezza) causa di un arresto del processo dopo ~5.8h di esecuzione
+   continua su HO2, con swap quasi pieno e warning di risorse "leaked" da
+   `joblib`.
+
 ### 2.3 File che descrivono l'ambiente
 
 - `environment.yml` — cosa installare
@@ -315,21 +422,30 @@ non è riconosciuto, senza toccare nessuna metrica numerica.
 `001603` (20kHz) e `001872` (10kHz) nella stessa chiamata a
 `run_pipeline()`.
 
-**Niente più matrice Parquet consolidata** (decisione 2026-07-13): dato che
-MEA-NAP scrive già CSV puliti e pronti, uno script di merge extra sarebbe
-solo un sovraccarico. Stage 3-5 leggerà questi CSV direttamente (con un
+Dato che MEA-NAP scrive già CSV puliti e pronti, uno script di merge extra sarebbe solo un sovraccarico. Stage 3-5 leggerà questi CSV direttamente (con un
 pivot long→wide per le metriche di rete, che sono una riga per
 registrazione×lag, più il join con le righe HO5-8 da
 `build_feature_matrix.py`) quando verrà costruito — vedi §3.5.
 
-**Cosa succede ai risultati calcolati con gli approcci precedenti?** Non
-cancellati, tenuti come confronto storico su disco:
-`outputs/features/feature_matrix_001603_deposited_only.parquet` (tutta
-Units-depositate), `outputs/features/feature_matrix_001872.parquet`
-(self-derived sorting via `lupin`, fermato a metà), `outputs/features/
-feature_matrix_001603.parquet`/`feature_matrix_001872_meanap.parquet`
-(chiamate MEA-NAP a pezzi, Revisione 1-2). Nessuno di questi viene
-ricalcolato o usato come base per Stage 3-5.
+**Migrazione alla workstation e ottimizzazione (2026-07-16/22).** Il
+`run_pipeline()` completo, testato su un file piccolo, mostrava un
+problema reale solo a scala piena: su registrazioni HD-MEA a 1000+ canali
+(HO1-4, molte di 001872), lo Step 4 poteva richiedere ore o non completare
+mai, contro pochi minuti sulle registrazioni piccole. Trasferito il
+progetto su una workstation del laboratorio (24 core, 30GB RAM — poi
+scoperta essere una WSL2, non Linux nativo) per avere più margine di
+calcolo, e investigato a fondo la causa: non un singolo bug, ma **sette
+colli di bottiglia distinti** nel codice vendored di MEA-NAP, mai emersi
+prima perché mai testato a questa scala di canali/densità — dettagliati in
+§2.2.2. Il più significativo: registrazioni con connettività STTC
+molto densa (fino al 97% osservato, segnale reale di sincronizzazione di
+rete negli organoidi) rendono alcuni algoritmi di randomizzazione
+statisticamente impraticabili, non solo lenti — richiede di saltare
+esplicitamente quelle metriche sopra una soglia di densità, non di
+parallelizzare ulteriormente. **Primo completamento riuscito end-to-end di
+una registrazione a 1000+ canali (HO2)**: 22 luglio 2026, dopo tutte le
+correzioni.
+
 
 ### 3.5 Stage 3-5 (non ancora iniziati)
 
@@ -549,7 +665,7 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
 
 ---
 
-## 7. Stato attuale del progetto (aggiornato a questa sessione)
+## 7. Stato attuale del progetto
 
 - ✅ **Stage 0-1**: completi. Ambiente, inventario dati, validazione pipeline
   (con esito negativo sul criterio originale, ma decisione umana di
@@ -564,6 +680,10 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
   separato `deposited` (`build_feature_matrix.py`). I tre percorsi
   precedenti (chiamate MEA-NAP a pezzi, self-derived sorting, Units
   depositate ovunque) sono superati e tenuti solo come confronto storico.
+  In esecuzione sulla workstation del laboratorio dopo sette correzioni di
+  performance/correttezza nel codice vendored (§2.2.2) — HO2 (1014 canali)
+  completato con successo il 22 luglio 2026, primo caso a questa scala;
+  registrazioni restanti in corso.
 - ⏳ **Stage 3-5**: non ancora iniziati. Leggeranno i CSV nativi di
   MEA-NAP sotto `outputs/meanap_pipeline/OutputData/` direttamente
   (nessun Parquet consolidato, decisione 2026-07-13) — pivot long→wide
@@ -606,3 +726,12 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
 8. **Risultati superati non vengono cancellati**, solo affiancati da una
    versione aggiornata con un nome file chiaro (es. `_deposited_only`,
    `_meanap`) — permette confronti futuri senza dover ricalcolare da zero.
+9. **Sopra una certa densità di connettività, alcune metriche si saltano
+   esplicitamente invece di parallelizzare all'infinito** (2026-07-22,
+   `NULL_MODEL_DENSITY_LIMIT` — vedi §2.2.2 punto 6). Non tutti i problemi
+   di performance sono risolvibili con più core: alcuni algoritmi di
+   randomizzazione diventano statisticamente impraticabili su grafi quasi
+   completi, indipendentemente da quanto lavoro venga distribuito in
+   parallelo. Quando succede, il gap va segnalato nei dati (colonna
+   booleana dedicata), mai nascosto in un valore silenziosamente sbagliato
+   o in un processo che non finisce mai.
