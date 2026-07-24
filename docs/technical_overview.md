@@ -74,7 +74,8 @@ Lo stato attuale è documentato in dettaglio al §7.
 | `features/complexity.py` | Feature di criticità: avalanche, entropia, complessità di Lempel-Ziv — **non fanno parte di MEA-NAP**, supplementari, non nel set primario per Stage 3-5 |
 | `build_feature_matrix.py` | **Attivo solo per HO5-8** (eccezione forzata, Units depositate); il resto del file (percorso MEA-NAP a pezzi) è superato, output storico tenuto — vedi §3.4 |
 | `build_feature_matrix_001872.py` | **Percorso superato** (self-derived sorting `lupin`); tenuto solo perché `io_nwb_convert.py` importa `_RAW_FILES`/`_parse_filename` da qui — output storico tenuto, non ricalcolato — vedi §3.4 |
-| `batch_effect.py`, `harmonize.py`, `reference.py` | Stage 3-5, non ancora implementati — leggeranno i CSV nativi di MEA-NAP direttamente (vedi §3.4), non un file Parquet consolidato |
+| `batch_effect.py` | Stage 3. Livello di caricamento dati implementato e testato (`load_meanap_features`, `load_ho5_8_deposited`, `primary_feature_columns` — leggono i CSV nativi di MEA-NAP direttamente, vedi §3.4, non un Parquet consolidato); le funzioni di analisi vera e propria (PCA/UMAP, PERMANOVA, modelli misti) restano non implementate finché Stage 2 non è completo — vedi §7 |
+| `harmonize.py`, `reference.py` | Stage 4-5, non ancora implementati |
 
 ---
 
@@ -250,10 +251,45 @@ del deploy.
    serve riapplicare a mano) — chiusura esplicita del pool di processi di
    `joblib` dopo ogni registrazione (`get_reusable_executor().shutdown()`),
    dato che una singola registrazione può fare 10+ chiamate separate a
-   `joblib.Parallel()` nello Step 4; sospettato (non confermato con
-   certezza) causa di un arresto del processo dopo ~5.8h di esecuzione
-   continua su HO2, con swap quasi pieno e warning di risorse "leaked" da
-   `joblib`.
+   `joblib.Parallel()` nello Step 4. Utile di per sé (evita l'accumulo di
+   semafori/cartelle temporanee tra registrazioni), ma **non era la causa
+   principale** degli arresti del processo dopo registrazioni grandi — vedi
+   punti 9 e 10 per la causa reale, trovata più tardi con `dmesg`.
+9. **`io.py::load_raw_recording`** — causa reale, confermata, dei crash per
+   OOM dopo registrazioni HD-MEA grandi (non un mistero "il processo sparisce
+   senza traccia": `dmesg | grep -i oom` mostra l'evento con tanto di PID e
+   RSS al momento del kill — un SIGKILL non lascia a Python il tempo di
+   scrivere nulla nel proprio log, quindi il pipeline log da solo non basta
+   a diagnosticarlo). La riga
+   `f["dat"][()].T.astype(np.float32)` faceva una copia completa
+   dell'array anche quando era **già** float32 su disco (il default di
+   `.astype()` è `copy=True` incondizionato) — per una registrazione da
+   1020 canali × 180s × 20kHz (~13.7GB), il picco di memoria toccava
+   ~27.4GB (due copie complete) solo per questa riga, spiegando quasi
+   esattamente l'RSS di ~29GB misurato dal kernel al momento del kill.
+   Fix: `.astype(np.float32, copy=False)` — numpy salta la copia quando il
+   dtype coincide già (verificato con `np.shares_memory`), continuando a
+   convertire correttamente quando serve davvero.
+10. **`src/run_meanap_pipeline.py::main()`** — anche con la fix del punto 9,
+    un problema separato restava: la memoria "liberata" da una registrazione
+    grande non tornava sempre al sistema operativo entro lo stesso processo
+    Python di lunga durata (comportamento noto dell'allocatore
+    glibc/numpy), accumulandosi tra registrazioni finché quella successiva
+    non faceva scattare comunque un OOM. Fix architetturale, non un'altra
+    micro-patch: ogni registrazione ora gira nel proprio processo figlio
+    (`multiprocessing.get_context("fork")`, `ctx.Process(target=
+    process_one_recording, ...)`, `.join()`) — quando il processo termina,
+    il sistema operativo recupera *tutta* la sua memoria incondizionatamente,
+    indipendentemente da cosa l'allocatore stesse trattenendo. Beneficio
+    collaterale non previsto all'inizio: un crash (incluso un OOM kill, che
+    non lascia scrivere nulla nel log) ora abbatte solo il processo figlio
+    di quella registrazione, non l'intera esecuzione da 25 registrazioni —
+    il padre rileva `p.exitcode` negativo, lo registra nel proprio log
+    (`FAILED (terminated by signal N)`) e passa alla registrazione
+    successiva. Verificato con un test isolato a 3 casi (completamento
+    normale, eccezione, auto-SIGKILL simulato) prima di lanciarlo sulla
+    pipeline reale, dato che `fork` non esiste affatto su Windows e non era
+    quindi testabile in locale.
 
 ### 2.3 File che descrivono l'ambiente
 
@@ -445,6 +481,22 @@ esplicitamente quelle metriche sopra una soglia di densità, non di
 parallelizzare ulteriormente. **Primo completamento riuscito end-to-end di
 una registrazione a 1000+ canali (HO2)**: 22 luglio 2026, dopo tutte le
 correzioni.
+
+Il processo continuava però a morire in modo silenzioso subito dopo aver
+finito una registrazione grande e averne iniziata una nuova — inizialmente
+attribuito (senza conferma diretta) a risorse `joblib` non rilasciate.
+La causa reale, trovata leggendo `dmesg` invece di fidarsi solo del log
+della pipeline, era duplice: un bug concreto in `io.py` che raddoppiava
+inutilmente il picco di memoria per ogni caricamento del file raw
+(~27GB invece di ~14GB per una registrazione da 1020 canali), più un
+problema più fondamentale di accumulo di memoria *tra* registrazioni
+diverse all'interno dello stesso processo Python di lunga durata — risolto
+non con un'altra patch mirata ma isolando ogni registrazione nel proprio
+sottoprocesso, così il sistema operativo recupera tutto incondizionatamente
+a ogni chiusura. Dettagli completi ai punti 8-10 di §2.2.2. Con queste due
+correzioni, HO2 (una seconda sessione della stessa registrazione che aveva
+innescato il crash) è stata completata senza incidenti, confermando la fix
+sul caso esatto che l'aveva fatta scoprire.
 
 
 ### 3.5 Stage 3-5 (non ancora iniziati)
@@ -680,15 +732,28 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
   separato `deposited` (`build_feature_matrix.py`). I tre percorsi
   precedenti (chiamate MEA-NAP a pezzi, self-derived sorting, Units
   depositate ovunque) sono superati e tenuti solo come confronto storico.
-  In esecuzione sulla workstation del laboratorio dopo sette correzioni di
-  performance/correttezza nel codice vendored (§2.2.2) — HO2 (1014 canali)
-  completato con successo il 22 luglio 2026, primo caso a questa scala;
-  registrazioni restanti in corso.
-- ⏳ **Stage 3-5**: non ancora iniziati. Leggeranno i CSV nativi di
-  MEA-NAP sotto `outputs/meanap_pipeline/OutputData/` direttamente
-  (nessun Parquet consolidato, decisione 2026-07-13) — pivot long→wide
-  per le metriche di rete, join con le righe HO5-8, tutto da fare in
-  quella fase, non prima.
+  In esecuzione sulla workstation del laboratorio dopo dieci correzioni di
+  performance/correttezza/memoria nel codice vendored e nell'orchestratore
+  (§2.2.2, inclusi il fix OOM di `io.py` e l'isolamento per sottoprocesso
+  di `run_meanap_pipeline.py::main()`) — HO2 (1014 canali) completato con
+  successo il 22 luglio 2026, primo caso a questa scala; registrazioni
+  restanti in corso, resumibili (`outputs/meanap_pipeline/merged/`).
+- 🔄 **Stage 3**: infrastruttura di caricamento dati avviata
+  (`src/batch_effect.py::load_meanap_features`/`load_ho5_8_deposited`/
+  `primary_feature_columns`, coperta da test in `tests/test_batch_effect.py`)
+  mentre Stage 2 è ancora in corso — le funzioni di analisi vera e propria
+  (PCA/UMAP, PERMANOVA, modelli misti) restano deliberatamente non
+  implementate finché non c'è il set completo di registrazioni. Decisioni
+  di selezione feature già prese dopo aver controllato le prime 8
+  registrazioni harvestate: `PCmean` e tutto ciò che ne dipende (cartografia
+  dei nodi, hub, `PCmeanTop10`/`Bottom10`) e le versioni normalizzate col
+  modello nullo (`SW`/`SWw`/`CC`/`PL`, non `CC_rawMean`/`PL_raw`) escluse
+  dal set primario perché calcolate in modo incoerente (o del tutto assenti)
+  a seconda della densità della registrazione — vedi
+  `outputs/reports/stage2_data_quality_notes.md` per i dettagli e la
+  rassegna di letteratura su questo problema (noto in generale nell'analisi
+  di rete, non specifico di questo progetto).
+- ⏳ **Stage 4-5**: non ancora iniziati.
 - ⏳ **Modulo BrainWave5/3Brain**: infrastruttura pronta e testata (con un
   file di esempio pubblico), in attesa dei dati reali del laboratorio.
 
@@ -735,3 +800,16 @@ essere letti riga per riga in condizioni normali — solo in caso di problemi.
    parallelo. Quando succede, il gap va segnalato nei dati (colonna
    booleana dedicata), mai nascosto in un valore silenziosamente sbagliato
    o in un processo che non finisce mai.
+10. **Metriche PC-derivate e small-worldness/CC/PL normalizzate escluse dal
+    set primario di Stage 3-5** (2026-07-24 — vedi `outputs/reports/
+    stage2_data_quality_notes.md`, conseguenza diretta del punto 9: le
+    stesse metriche che vengono saltate sopra la soglia di densità). Non
+    una scelta arbitraria: la letteratura sull'analisi di rete conferma che
+    la normalizzazione via modello nullo può *aumentare* la sensibilità
+    alla dimensione della rete invece di correggerla, e che MEA-NAP stesso
+    dichiara di essere stato validato per array a 60-64 elettrodi, non per
+    l'HD-MEA a 1000+ canali usato qui. `CC_rawMean`/`PL_raw`
+    (deterministici, sempre disponibili) restano le metriche primarie di
+    clustering/path-length al loro posto; `aN` (dimensione della rete) va
+    incluso come covariata esplicita nel modello dell'effetto batch,
+    invece di assumere che il problema sia già risolto altrove.
